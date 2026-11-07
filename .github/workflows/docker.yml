@@ -5,6 +5,8 @@ on:
     branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+  pull_request:
+    branches: [main]
 
 env:
   REGISTRY: ghcr.io
@@ -12,11 +14,41 @@ env:
 
 permissions:
   contents: read
-  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-and-push:
+  tests:
+    uses: ./.github/workflows/test.yml
+
+  container-check:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: docker/setup-buildx-action@v3
+      - name: Build verification image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: deepai2api:verify
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify container and persistent data
+        run: node scripts/docker-smoke.js deepai2api:verify
+
+  build-and-push:
+    needs: [tests, container-check]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,6 +71,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: latest=false
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}

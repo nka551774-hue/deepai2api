@@ -7,6 +7,22 @@
  */
 const crypto = require('crypto');
 const { CONFIG } = require('./config');
+const { publicSettings, validateSettingsPatch } = require('./settings');
+
+const EDITABLE_SETTINGS = [
+  'defaultModel',
+  'modelMap',
+  'passThroughModels',
+  'requestTimeoutMs',
+  'allowAnonymousFallback',
+  'allowOpenWhenNoKeys',
+  'maxLogEntries',
+  'pollIntervalMs',
+  'theme',
+  'uiLanguage',
+  'visiblePages',
+  'windowMaxHeight',
+];
 
 /**
  * @param {import('./store').Store} store
@@ -24,7 +40,7 @@ function createAdminRoutes(store, pool, auth) {
 
   function guard(req, res) {
     if (!auth.isAdmin(tokenOf(req))) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify({ error: 'Unauthorized' }));
       return false;
     }
@@ -32,7 +48,10 @@ function createAdminRoutes(store, pool, auth) {
   }
 
   function json(res, status, obj) {
-    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.writeHead(status, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
     res.end(JSON.stringify(obj));
   }
 
@@ -41,11 +60,85 @@ function createAdminRoutes(store, pool, auth) {
     let size = 0;
     for await (const c of req) {
       size += c.length;
-      if (size > 2 * 1024 * 1024) throw new Error('Body too large');
+      if (size > 2 * 1024 * 1024) {
+        const error = new Error('Body too large');
+        error.status = 413;
+        throw error;
+      }
       chunks.push(c);
     }
     const raw = Buffer.concat(chunks).toString('utf8');
-    return raw ? JSON.parse(raw) : {};
+    let body;
+    try {
+      body = raw ? JSON.parse(raw) : {};
+    } catch {
+      const error = new Error('Malformed JSON body');
+      error.status = 400;
+      throw error;
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      const error = new Error('JSON body must be an object');
+      error.status = 400;
+      throw error;
+    }
+    return body;
+  }
+
+  function clientError(message) {
+    const error = new Error(message);
+    error.status = 400;
+    return error;
+  }
+
+  function validateAccountMetadata(body, { requireId = false } = {}) {
+    if (requireId && (typeof body.id !== 'string' || !body.id.trim())) throw clientError('id is required');
+    const patch = {};
+    if (Object.hasOwn(body, 'name')) {
+      if (typeof body.name !== 'string') throw clientError('name must be a string');
+      patch.name = body.name.trim();
+    }
+    if (Object.hasOwn(body, 'group')) {
+      if (typeof body.group !== 'string') throw clientError('group must be a string');
+      patch.group = body.group.trim();
+    }
+    if (Object.hasOwn(body, 'weight')) {
+      if (!Number.isInteger(body.weight) || body.weight < 1 || body.weight > 100) {
+        throw clientError('weight must be an integer from 1 to 100');
+      }
+      patch.weight = body.weight;
+    }
+    return patch;
+  }
+
+  function accountView(account) {
+    const now = Date.now();
+    return {
+      id: account.id,
+      type: account.type,
+      name: account.name || '',
+      email: account.type === 'login' ? account.email || '' : '',
+      cookiePreview: account.cookie ? 'Cookie ••••' : '',
+      cookieUpdatedAt: account.cookieUpdatedAt || null,
+      apiKeyPreview: account.type === 'apikey' && account.apiKey ? 'API Key ••••' : '',
+      group: account.group || '',
+      weight: Number.isInteger(account.weight) ? account.weight : 1,
+      status: account.status,
+      parked: Boolean(account.cooldownUntil && account.cooldownUntil > now),
+      cooldownUntil: account.cooldownUntil && account.cooldownUntil > now ? new Date(account.cooldownUntil).toISOString() : null,
+      uses: account.uses || 0,
+      errors: account.errors || 0,
+      lastUsedAt: account.lastUsedAt || null,
+      lastErrorAt: account.lastErrorAt || null,
+      lastErrorMessage: account.lastErrorMessage || '',
+      userInfo: account.userInfo
+        ? { username: account.userInfo.username, email: account.userInfo.email, plan: planOf(account.userInfo) }
+        : null,
+      createdAt: account.createdAt || null,
+    };
+  }
+
+  function localDateKey(date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   }
 
   /** Friendly plan/credit summary from the /daily-time-sync/user/ object. */
@@ -60,6 +153,7 @@ function createAdminRoutes(store, pool, auth) {
 
   return {
     async handle(req, res, pathname) {
+      try {
       const route = `${req.method} ${pathname}`;
 
       // ---- panel session (workbuddy-compatible contract) --------------------
@@ -83,16 +177,15 @@ function createAdminRoutes(store, pool, auth) {
         return json(res, 200, { ok: true });
       }
       if (route === 'POST /panel/password') {
-        if (!auth.isAdmin(tokenOf(req))) return json(res, 401, { ok: false, error: 'unauthorized' });
+        const currentToken = tokenOf(req);
+        if (!auth.isAdmin(currentToken)) return json(res, 401, { ok: false, error: 'unauthorized' });
         const body = await readBody(req);
-        // current password is required unless it is still the default
-        if (!auth.panelPasswordIsDefault()) {
-          const cur = auth.login(body.current ?? '', false);
-          if (!cur) return json(res, 400, { ok: false, error: 'current password incorrect' });
+        if (!auth.verifyPanelPassword(body.current ?? '')) {
+          return json(res, 400, { ok: false, error: 'current password incorrect' });
         }
         const next = String(body.next ?? '');
         if (next.length < 1) return json(res, 400, { ok: false, error: 'new password required' });
-        auth.setPanelPassword(next);
+        auth.setPanelPassword(next, currentToken);
         return json(res, 200, { ok: true });
       }
 
@@ -108,9 +201,10 @@ function createAdminRoutes(store, pool, auth) {
         return json(res, 200, { ok: true });
       }
       if (route === 'GET /api/admin/config') {
+        const settings = store.state.settings || {};
         return json(res, 200, {
-          openMode: CONFIG.allowOpenWhenNoKeys && store.state.gatewayKeys.length === 0,
-          anonFallback: CONFIG.allowAnonymousFallback,
+          openMode: (settings.allowOpenWhenNoKeys ?? CONFIG.allowOpenWhenNoKeys) && store.state.gatewayKeys.length === 0,
+          anonFallback: settings.allowAnonymousFallback ?? CONFIG.allowAnonymousFallback,
         });
       }
 
@@ -135,7 +229,7 @@ function createAdminRoutes(store, pool, auth) {
             },
             cooling: accounts.filter((a) => a.cooldownUntil && a.cooldownUntil > now).length,
             disabled: accounts.filter((a) => a.status === 'disabled').length,
-            anonymousFallback: CONFIG.allowAnonymousFallback,
+            anonymousFallback: store.state.settings.allowAnonymousFallback ?? CONFIG.allowAnonymousFallback,
             lastError: accounts.filter((a) => a.lastErrorMessage).slice(0, 5).map((a) => ({
               name: a.name || a.email || 'account',
               error: a.lastErrorMessage,
@@ -154,42 +248,32 @@ function createAdminRoutes(store, pool, auth) {
             perModel: s.perModel,
             perGatewayKey: s.perGatewayKey,
           },
-          settings: store.state.settings,
+          settings: publicSettings(store.state.settings),
         });
       }
 
       // ---- upstream accounts ----------------------------------------------------
       if (route === 'GET /api/admin/accounts') {
-        const now = Date.now();
         return json(res, 200, {
-          accounts: pool.list().map((a) => ({
-            id: a.id,
-            type: a.type,
-            name: a.name,
-            email: a.type === 'login' ? a.email : '',
-            cookiePreview: a.cookie ? a.cookie.slice(0, 24) + '…' : '',
-            cookieUpdatedAt: a.cookieUpdatedAt,
-            apiKeyPreview: a.type === 'apikey' ? a.apiKey.slice(0, 10) + '…' : '',
-            status: a.status,
-            parked: Boolean(a.cooldownUntil && a.cooldownUntil > now),
-            cooldownUntil: a.cooldownUntil && a.cooldownUntil > now ? new Date(a.cooldownUntil).toISOString() : null,
-            uses: a.uses,
-            errors: a.errors,
-            lastUsedAt: a.lastUsedAt,
-            lastErrorAt: a.lastErrorAt,
-            lastErrorMessage: a.lastErrorMessage,
-            userInfo: a.userInfo ? { username: a.userInfo.username, email: a.userInfo.email, plan: planOf(a.userInfo) } : null,
-            createdAt: a.createdAt,
-          })),
+          accounts: pool.list().map(accountView),
         });
       }
       if (route === 'POST /api/admin/accounts') {
         try {
           const body = await readBody(req);
+          const metadata = validateAccountMetadata(body);
           if (body.type === 'login') {
             const account = await pool.addLoginAccount(body.email, body.password, body.name);
+            if (Object.hasOwn(metadata, 'group') || Object.hasOwn(metadata, 'weight')) pool.updateAccount(account.id, metadata);
             return json(res, 200, { added: 1, account: { id: account.id, name: account.name } });
           }
+          if (body.type === 'apikey') {
+            if (typeof body.apiKey !== 'string' || !body.apiKey.trim()) throw clientError('apiKey is required');
+            const account = pool.addApiKeyAccount(body.apiKey.trim(), metadata.name || '');
+            if (Object.keys(metadata).length) pool.updateAccount(account.id, metadata);
+            return json(res, 200, { added: 1, account: { id: account.id, name: account.name } });
+          }
+          if (body.type !== undefined && body.type !== 'cookie') throw clientError('type must be cookie, login or apikey');
           // default: cookie import (one per line)
           const cookies = String(body.cookie ?? '')
             .split(/\r?\n/)
@@ -198,12 +282,13 @@ function createAdminRoutes(store, pool, auth) {
           if (!cookies.length) return json(res, 400, { error: 'Provide a Cookie header (或多行,一行一個帳號)' });
           const added = [];
           const failed = [];
-          for (const c of cookies) {
+          for (const [index, c] of cookies.entries()) {
             try {
               const acc = pool.addCookieAccount(c, body.name);
+              if (Object.keys(metadata).length) pool.updateAccount(acc.id, metadata);
               added.push(acc.id);
             } catch (err) {
-              failed.push({ preview: c.slice(0, 20) + '…', error: err.message });
+              failed.push({ index, error: err.message });
             }
           }
           return json(res, added.length ? 200 : 400, { added: added.length, failed });
@@ -211,10 +296,92 @@ function createAdminRoutes(store, pool, auth) {
           return json(res, 400, { error: err.message });
         }
       }
+      if (route === 'POST /api/admin/accounts/update') {
+        try {
+          const body = await readBody(req);
+          const patch = validateAccountMetadata(body, { requireId: true });
+          if (!Object.keys(patch).length) throw clientError('No editable account fields were provided');
+          const account = pool.updateAccount(body.id.trim(), patch);
+          return json(res, 200, { account: accountView(account) });
+        } catch (err) {
+          return json(res, err.status || 400, { error: err.message });
+        }
+      }
+      if (route === 'POST /api/admin/accounts/batch') {
+        try {
+          const body = await readBody(req);
+          if (!Array.isArray(body.ids) || body.ids.some((id) => typeof id !== 'string' || !id.trim())) {
+            throw clientError('ids must be an array of account IDs');
+          }
+          const action = body.action;
+          if (!['enable', 'disable', 'reset', 'test', 'refresh', 'delete'].includes(action)) {
+            throw clientError('Invalid batch action');
+          }
+          const results = [];
+          for (const id of [...new Set(body.ids.map((value) => value.trim()))]) {
+            try {
+              if (action === 'enable') pool.setStatus(id, 'active');
+              else if (action === 'disable') pool.setStatus(id, 'disabled');
+              else if (action === 'reset') pool.resetAccount(id);
+              else if (action === 'test') {
+                const result = await pool.probe(id);
+                if (result && result.ok === false) throw new Error(result.message || 'Account test failed');
+              } else if (action === 'refresh') {
+                const account = pool.get(id);
+                if (!account) throw new Error('Account not found');
+                if (account.type !== 'login') throw new Error('Refresh is only available for login accounts');
+                const result = await pool.refreshLogin(account);
+                if (!result || result.ok === false) throw new Error(result?.message || 'Account refresh failed');
+              } else if (action === 'delete') pool.removeAccount(id);
+              results.push({ id, ok: true });
+            } catch (err) {
+              results.push({ id, ok: false, message: err.message });
+            }
+          }
+          const succeeded = results.filter((result) => result.ok).length;
+          return json(res, 200, { results, succeeded, failed: results.length - succeeded });
+        } catch (err) {
+          return json(res, err.status || 400, { error: err.message });
+        }
+      }
+      if (route === 'POST /api/admin/accounts/import') {
+        try {
+          const body = await readBody(req);
+          if (!Array.isArray(body.accounts)) throw clientError('accounts must be an array');
+          let added = 0;
+          const failed = [];
+          for (let index = 0; index < body.accounts.length; index += 1) {
+            try {
+              const record = body.accounts[index];
+              if (!record || typeof record !== 'object' || Array.isArray(record)) throw clientError('Account record must be an object');
+              await pool.importAccount({ ...record });
+              added += 1;
+            } catch (err) {
+              failed.push({ index, error: err.message });
+            }
+          }
+          return json(res, 200, { added, failed });
+        } catch (err) {
+          return json(res, err.status || 400, { error: err.message });
+        }
+      }
+      if (route === 'POST /api/admin/accounts/export') {
+        try {
+          const body = await readBody(req);
+          if (body.ids !== undefined && (!Array.isArray(body.ids) || body.ids.some((id) => typeof id !== 'string' || !id.trim()))) {
+            throw clientError('ids must be an array of account IDs');
+          }
+          const ids = body.ids === undefined ? undefined : [...new Set(body.ids.map((id) => id.trim()))];
+          return json(res, 200, { version: 1, accounts: pool.exportAccounts(ids) });
+        } catch (err) {
+          return json(res, err.status || 400, { error: err.message });
+        }
+      }
       if (route === 'POST /api/admin/accounts/status') {
         try {
           const body = await readBody(req);
-          return json(res, 200, { account: pool.setStatus(body.id, body.status) });
+          if (!['active', 'disabled'].includes(body.status)) throw clientError('status must be active or disabled');
+          return json(res, 200, { account: accountView(pool.setStatus(body.id, body.status)) });
         } catch (err) {
           return json(res, 400, { error: err.message });
         }
@@ -222,7 +389,7 @@ function createAdminRoutes(store, pool, auth) {
       if (route === 'POST /api/admin/accounts/reset') {
         try {
           const body = await readBody(req);
-          return json(res, 200, { account: pool.resetAccount(body.id) });
+          return json(res, 200, { account: accountView(pool.resetAccount(body.id)) });
         } catch (err) {
           return json(res, 400, { error: err.message });
         }
@@ -249,7 +416,7 @@ function createAdminRoutes(store, pool, auth) {
       const accDel = pathname.match(/^\/api\/admin\/accounts\/([a-f0-9-]+)$/);
       if (accDel && req.method === 'DELETE') {
         try {
-          return json(res, 200, { removed: pool.removeAccount(accDel[1]) });
+          return json(res, 200, { removed: accountView(pool.removeAccount(accDel[1])) });
         } catch (err) {
           return json(res, 404, { error: err.message });
         }
@@ -273,6 +440,16 @@ function createAdminRoutes(store, pool, auth) {
           return json(res, 200, { key: auth.setGatewayKeyEnabled(body.id, body.enabled) });
         } catch (err) {
           return json(res, 400, { error: err.message });
+        }
+      }
+      if (route === 'POST /api/admin/gateway-keys/update') {
+        try {
+          const body = await readBody(req);
+          if (typeof body.id !== 'string' || !body.id.trim()) throw clientError('id is required');
+          const { id, ...patch } = body;
+          return json(res, 200, { key: auth.updateGatewayKey(id.trim(), patch) });
+        } catch (err) {
+          return json(res, err.status || 400, { error: err.message });
         }
       }
       const gwDel = pathname.match(/^\/api\/admin\/gateway-keys\/([a-f0-9-]+)$/);
@@ -299,6 +476,10 @@ function createAdminRoutes(store, pool, auth) {
       if (route === 'GET /api/admin/analytics') {
         const range = new URL(req.url, 'http://x').searchParams.get('range') || '7d';
         const days = range === 'today' ? 1 : range === '30d' ? 30 : 7;
+        const now = new Date();
+        const since = new Date(now.getFullYear(), now.getMonth(), now.getDate() - days + 1);
+        const sinceMs = since.getTime();
+        const nowMs = now.getTime();
         const logs = store.state.logs.filter((l) => l.ts && l.kind);
         const byDay = new Map();
         const byHour = new Map();
@@ -309,12 +490,11 @@ function createAdminRoutes(store, pool, auth) {
         let chars = 0;
         let latencySum = 0;
         let latencyN = 0;
-        const sinceMs = Date.now() - days * 24 * 3600 * 1000;
         for (const l of logs) {
           const t = Date.parse(l.ts);
           if (!Number.isFinite(t)) continue;
-          if (days > 1 && t < sinceMs) continue;
-          if (days === 1 && t < sinceMs - 6 * 3600 * 1000) continue; // today keeps late-night history
+          if (t < sinceMs || t > nowMs) continue;
+          const localTime = new Date(t);
           const ok = l.status === 'ok';
           total += 1;
           if (!ok) errors += 1;
@@ -323,13 +503,13 @@ function createAdminRoutes(store, pool, auth) {
             latencySum += l.latencyMs;
             latencyN += 1;
           }
-          const d = l.ts.slice(0, 10);
+          const d = localDateKey(localTime);
           const day = (byDay.get(d) || { date: d, requests: 0, errors: 0, chars: 0 });
           day.requests += 1;
           if (!ok) day.errors += 1;
           day.chars += l.chars || 0;
           byDay.set(d, day);
-          const h = l.ts.slice(11, 13);
+          const h = String(localTime.getHours()).padStart(2, '0');
           const hour = (byHour.get(h) || { hour: h, requests: 0, errors: 0 });
           hour.requests += 1;
           if (!ok) hour.errors += 1;
@@ -350,7 +530,7 @@ function createAdminRoutes(store, pool, auth) {
         }
         const dayList = [];
         for (let i = days - 1; i >= 0; i--) {
-          const d = new Date(Date.now() - i * 24 * 3600 * 1000).toISOString().slice(0, 10);
+          const d = localDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - i));
           dayList.push(byDay.get(d) || { date: d, requests: 0, errors: 0, chars: 0 });
         }
         const hourList = [];
@@ -378,21 +558,24 @@ function createAdminRoutes(store, pool, auth) {
 
       // ---- settings ---------------------------------------------------------------
       if (route === 'GET /api/admin/settings') {
-        return json(res, 200, { settings: store.state.settings, editable: ['defaultModel', 'modelMap', 'requestTimeoutMs', 'passThroughModels'] });
+        return json(res, 200, { settings: publicSettings(store.state.settings), editable: EDITABLE_SETTINGS });
       }
       if (route === 'POST /api/admin/settings') {
-        const body = await readBody(req);
-        const s = store.state.settings;
-        if (typeof body.defaultModel === 'string' && body.defaultModel) s.defaultModel = body.defaultModel;
-        if (body.modelMap && typeof body.modelMap === 'object') s.modelMap = body.modelMap;
-        if (typeof body.passThroughModels === 'boolean') s.passThroughModels = body.passThroughModels;
-        if (Number.isFinite(Number(body.requestTimeoutMs)) && Number(body.requestTimeoutMs) >= 5000)
-          s.requestTimeoutMs = Number(body.requestTimeoutMs);
-        store.save();
-        return json(res, 200, { settings: s });
+        try {
+          const patch = validateSettingsPatch(await readBody(req));
+          store.state.settings = { ...store.state.settings, ...patch };
+          store.save();
+          return json(res, 200, { settings: publicSettings(store.state.settings) });
+        } catch (err) {
+          return json(res, err.status || 400, { error: err.message });
+        }
       }
 
       return json(res, 404, { error: 'Not found' });
+      } catch (err) {
+        if (res.writableEnded) return;
+        return json(res, err.status || 500, { error: err.message || 'Internal server error' });
+      }
     },
   };
 }

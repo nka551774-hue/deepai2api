@@ -150,9 +150,8 @@ class DeepAIClient {
     const timeoutMs = opts.timeoutMs || CONFIG.upstream.timeoutMs;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const signal = opts.signal
-      ? AbortSignal.any ? AbortSignal.any([controller.signal, opts.signal]) : controller.signal
-      : controller.signal;
+    const combined = combineAbortSignals(controller, opts.signal);
+    const signal = combined.signal;
 
     let response;
     try {
@@ -161,13 +160,13 @@ class DeepAIClient {
         body: this.buildChatForm(messages, opts),
         headers: this.headers(),
         signal,
+        redirect: 'error',
       });
     } catch (err) {
       clearTimeout(timer);
-      if (err.name === 'AbortError') {
-        if (opts.signal?.aborted) throw new UpstreamError('Request cancelled', { code: 'ABORTED' });
-        throw new UpstreamError(`Upstream timed out after ${timeoutMs}ms`, { code: 'TIMEOUT', retryable: true });
-      }
+      combined.cleanup();
+      const aborted = translateAbort(err, opts.signal, timeoutMs);
+      if (aborted) throw aborted;
       throw new UpstreamError(`Upstream network error: ${err.message}`, { code: 'NETWORK', retryable: true });
     }
 
@@ -191,7 +190,7 @@ class DeepAIClient {
         const body = await response.text();
         const task = safeJson(body);
         if (task?.task_id) {
-          const finished = await this.waitForTask(task.task_id, opts.signal);
+          const finished = await this.waitForTask(task.task_id, signal);
           const raw = taskText(finished);
           const status = detectJsonStatus(raw);
           if (status) throw classifyRefusal(200, raw);
@@ -205,9 +204,14 @@ class DeepAIClient {
       const raw = await this.readStream(response, opts);
       const status = detectJsonStatus(raw);
       if (status) throw classifyRefusal(200, raw);
-      return finishParse(raw, opts);
+      return finishParse(raw);
+    } catch (err) {
+      const aborted = translateAbort(err, opts.signal, timeoutMs);
+      if (aborted) throw aborted;
+      throw err;
     } finally {
       clearTimeout(timer);
+      combined.cleanup();
     }
   }
 
@@ -218,7 +222,11 @@ class DeepAIClient {
   async readStream(response, opts = {}) {
     if (!response.body || typeof response.body.getReader !== 'function') {
       const txt = await response.text();
-      if (opts.onDelta) emitParsed(txt, '', opts); // single shot for bodyless fetch impls
+      if (opts.onDelta) {
+        const parsed = StreamParser.parse(txt);
+        if (parsed.thinkingText) safeOnDelta(opts.onDelta, '', '', parsed.thinkingText, parsed.thinkingText);
+        if (parsed.text) safeOnDelta(opts.onDelta, parsed.text, parsed.text, '', parsed.thinkingText);
+      }
       return txt;
     }
     const reader = response.body.getReader();
@@ -226,50 +234,41 @@ class DeepAIClient {
     let full = '';
     let emittedText = '';
     let emittedThinking = '';
-    let thinkingDirty = false;
+
+    const emitCurrent = () => {
+      if (!opts.onDelta) return;
+      const p = StreamParser.parse(full);
+      if (p.thinkingText.startsWith(emittedThinking) && p.thinkingText.length > emittedThinking.length) {
+        const delta = p.thinkingText.slice(emittedThinking.length);
+        emittedThinking = p.thinkingText;
+        safeOnDelta(opts.onDelta, '', emittedText, delta, emittedThinking);
+      }
+      if (p.text.startsWith(emittedText) && p.text.length > emittedText.length) {
+        const delta = p.text.slice(emittedText.length);
+        emittedText = p.text;
+        safeOnDelta(opts.onDelta, delta, emittedText, '', emittedThinking);
+      }
+    };
 
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
       full += decoder.decode(value, { stream: true });
-      const p = StreamParser.parse(full);
-      if (opts.onDelta) {
-        if (p.thinkingText.length > 0 || thinkingDirty) {
-          if (p.thinkingText !== emittedThinking) {
-            const delta = p.thinkingText.startsWith(emittedThinking)
-              ? p.thinkingText.slice(emittedThinking.length)
-              : p.thinkingText;
-            thinkingDirty = true;
-            emittedThinking = p.thinkingText;
-            try {
-              opts.onDelta(delta, emittedText, p.thinkingText);
-            } catch {
-              /* broken consumer must not kill the stream */
-            }
-          }
-        }
-        if (p.text.length > emittedText.length) {
-          const delta = p.text.slice(emittedText.length);
-          emittedText = p.text;
-          try {
-            opts.onDelta(delta, emittedText, emittedThinking);
-          } catch {
-            /* ignore */
-          }
-        }
-      }
+      emitCurrent();
     }
     full += decoder.decode();
     // Final pass so trailing payload/images are visible to the caller.
-    if (opts.onDelta) emitParsed(full, emittedText, opts);
+    emitCurrent();
     return full;
   }
 
   /** GET /check_chat_task_status?type=&task_id= — one poll. */
-  async taskStatus(taskId, type = 'thinking-task') {
+  async taskStatus(taskId, type = 'thinking-task', signal = null) {
     const url = `${CONFIG.upstream.baseUrl}${CONFIG.upstream.taskStatusPath}?type=${encodeURIComponent(type)}&task_id=${encodeURIComponent(taskId)}`;
-    const res = await fetch(url, { method: 'GET', headers: this.headers(), signal: this.abortSignal });
+    const res = await fetch(url, { method: 'GET', headers: this.headers(), signal, redirect: 'error' });
     const body = await res.text();
+    if (res.status === 401 || res.status === 403) throw classifyRefusal(res.status, body);
+    if (res.status > 299) throw httpUpstreamError(res.status, body);
     const data = safeJson(body);
     if (!data) throw new UpstreamError(`Task status not JSON: ${body.slice(0, 120)}`, { code: 'UPSTREAM_ERROR', retryable: true });
     return data;
@@ -279,20 +278,20 @@ class DeepAIClient {
   async waitForTask(taskId, signal) {
     const deadline = Date.now() + CONFIG.upstream.taskPollTimeoutMs;
     let last = null;
-    this.abortSignal = signal || null;
     while (Date.now() < deadline) {
-      if (signal?.aborted) throw new UpstreamError('Task polling cancelled', { code: 'ABORTED' });
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       try {
-        last = await this.taskStatus(taskId);
+        last = await this.taskStatus(taskId, 'thinking-task', signal);
       } catch (err) {
-        if (err.code === 'QUOTA' || err.code === 'BAD_KEY') throw err;
+        if (signal?.aborted || err.name === 'AbortError') throw err;
+        if (['QUOTA', 'BAD_KEY', 'LOGIN_REQUIRED', 'PLAN_REQUIRED', 'ABORTED'].includes(err.code)) throw err;
         last = null;
       }
       const status = String(last?.status || '').toUpperCase();
       if (status === 'COMPLETED' || status === 'COMPLETE' || status === 'SUCCESS') return last;
       if (status === 'FAILED' || status === 'ERROR')
         throw new UpstreamError(`Upstream task failed: ${last?.error || status}`, { code: 'TASK_FAILED' });
-      await sleep(CONFIG.upstream.taskPollIntervalMs);
+      await sleep(CONFIG.upstream.taskPollIntervalMs, signal);
     }
     throw new UpstreamError('Upstream task timed out', { code: 'TASK_TIMEOUT', retryable: true });
   }
@@ -301,7 +300,7 @@ class DeepAIClient {
    * Classic public API family: /api/<name> (e.g. text2img).
    * Buffers upload as file fields, everything else as form fields.
    */
-  async runApi(name, fields = {}) {
+  async runApi(name, fields = {}, opts = {}) {
     const url = `${CONFIG.upstream.baseUrl}/api/${String(name).replace(/^\/+/, '')}`;
     const form = new FormData();
     for (const [k, v] of Object.entries(fields || {})) {
@@ -312,35 +311,64 @@ class DeepAIClient {
         form.append(k, v);
       }
     }
-    const res = await fetch(url, { method: 'POST', body: form, headers: this.headers() });
-    let body = await res.text();
-    // The /api/* family refuses non-browser TLS stacks ("try this model on
-    // deepai.org"); retrying the same call through system curl usually
-    // passes, so cascade transports instead of failing.
-    let data = safeJson(body);
-    if (res.status > 299 || data === null || /try this model on deepai\.org/i.test(body)) {
-      const curlBody = await this.runApiViaCurl(url, fields);
-      if (curlBody !== null) {
-        body = curlBody;
-        data = safeJson(body);
+    const timeoutMs = opts.timeoutMs || CONFIG.upstream.timeoutMs;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const combined = combineAbortSignals(controller, opts.signal);
+    let res;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        body: form,
+        headers: this.headers(),
+        signal: combined.signal,
+        redirect: 'error',
+      });
+      let body = await res.text();
+      let data = safeJson(body);
+
+      // The /api/* family can refuse non-browser TLS stacks. Cascade to curl
+      // only for transport-looking responses; curl must then produce valid
+      // successful JSON before it replaces the original response.
+      const tlsRefusal = /try this model on deepai\.org/i.test(body);
+      if (tlsRefusal || (res.status <= 299 && data === null)) {
+        const curlBody = await this.runApiViaCurl(url, fields, { timeoutMs, signal: combined.signal });
+        if (curlBody !== null) {
+          const curlData = safeJson(curlBody);
+          if (curlData !== null) {
+            body = curlBody;
+            data = curlData;
+            res = { status: 200 };
+          }
+        }
       }
+      if (res.status === 401 || res.status === 403) throw classifyRefusal(res.status, body);
+      if (res.status > 299) throw httpUpstreamError(res.status, body);
+      if (data === null) throw classifyRefusal(res.status, String(body ?? ''));
+      if (data.err) throw classifyRefusal(200, JSON.stringify(data));
+      if (typeof data.status === 'string' && !data.share_url && !data.output_url && !data.output && !data.id)
+        throw classifyRefusal(200, body);
+      return data;
+    } catch (err) {
+      const aborted = translateAbort(err, opts.signal, timeoutMs);
+      if (aborted) throw aborted;
+      if (err instanceof UpstreamError) throw err;
+      throw new UpstreamError(`Upstream network error: ${err.message}`, { code: 'NETWORK', retryable: true });
+    } finally {
+      clearTimeout(timer);
+      combined.cleanup();
     }
-    if (res.status > 299 && data === null && body === null) throw classifyRefusal(res.status, body ?? '');
-    if (data === null) throw classifyRefusal(res.status, String(body ?? ''));
-    if (data.err) throw classifyRefusal(200, JSON.stringify(data));
-    if (typeof data.status === 'string' && !data.share_url && !data.output_url && !data.output && !data.id)
-      throw classifyRefusal(200, body);
-    return data;
   }
 
   /** POST a multipart /api/* call through the system curl binary. */
-  async runApiViaCurl(url, fields) {
+  async runApiViaCurl(url, fields, opts = {}) {
     const { spawn } = require('child_process');
     // The fetch attempt already consumed the single-use tryit key: mint a
     // fresh one unless this client carries a real dashboard key.
     const h = this.headers();
     if (!this.apiKey) h['api-key'] = mintTryItKey(CONFIG.upstream.userAgent);
-    const args = ['-s', '--max-time', '120', '-X', 'POST', url];
+    const timeoutSeconds = Math.max(1, Math.ceil((opts.timeoutMs || CONFIG.upstream.timeoutMs) / 1000));
+    const args = ['-s', '--max-time', String(timeoutSeconds), '-X', 'POST', url];
     for (const [k, v] of Object.entries(h)) args.push('-H', `${k}: ${v}`);
     for (const [k, v] of Object.entries(fields || {})) {
       if (v == null) continue;
@@ -351,10 +379,26 @@ class DeepAIClient {
       let err = '';
       try {
         const p = spawn('curl', args);
+        const abort = () => {
+          try {
+            p.kill();
+          } catch {
+            /* process already ended */
+          }
+          resolve(null);
+        };
+        if (opts.signal?.aborted) return abort();
+        opts.signal?.addEventListener('abort', abort, { once: true });
         p.stdout.on('data', (d) => (out += d));
         p.stderr.on('data', (d) => (err += d));
-        p.on('error', () => resolve(null));
-        p.on('close', () => resolve(out.trim() || null));
+        p.on('error', () => {
+          opts.signal?.removeEventListener('abort', abort);
+          resolve(null);
+        });
+        p.on('close', () => {
+          opts.signal?.removeEventListener('abort', abort);
+          resolve(out.trim() || null);
+        });
       } catch {
         resolve(null);
       }
@@ -379,22 +423,68 @@ function taskText(task) {
 }
 
 /** Parse a completed body into the gateway result shape. */
-function finishParse(raw, opts) {
+function finishParse(raw, opts = {}) {
   const p = StreamParser.parse(raw);
+  // JSON task results arrive as a complete body rather than through readStream.
+  if (opts.onDelta) {
+    if (p.thinkingText) safeOnDelta(opts.onDelta, '', '', p.thinkingText, p.thinkingText);
+    if (p.text) safeOnDelta(opts.onDelta, p.text, p.text, '', p.thinkingText);
+  }
   return { text: p.text, thinkingText: p.thinkingText, images: p.images, raw };
 }
 
-function emitParsed(full, emittedText, opts) {
-  const p = StreamParser.parse(full);
-  if (p.text.length > emittedText.length) {
-    opts.onDelta(p.text.slice(emittedText.length), p.text, p.thinkingText);
-  } else if (p.text !== emittedText && emittedText === '') {
-    opts.onDelta(p.text, p.text, p.thinkingText);
+function safeOnDelta(onDelta, textDelta, fullText, thinkingDelta, fullThinking) {
+  try {
+    onDelta(textDelta, fullText, thinkingDelta, fullThinking);
+  } catch {
+    /* a broken consumer must not cancel or corrupt the upstream stream */
   }
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function httpUpstreamError(status, body) {
+  return new UpstreamError(`Upstream HTTP ${status}: ${String(body || '').slice(0, 200)}`, {
+    code: 'UPSTREAM_ERROR',
+    retryable: status >= 500 || status === 429,
+    status,
+    body,
+  });
+}
+
+function combineAbortSignals(controller, externalSignal) {
+  if (!externalSignal) return { signal: controller.signal, cleanup() {} };
+  if (typeof AbortSignal.any === 'function') {
+    return { signal: AbortSignal.any([controller.signal, externalSignal]), cleanup() {} };
+  }
+  const forward = () => controller.abort();
+  if (externalSignal.aborted) controller.abort();
+  else externalSignal.addEventListener('abort', forward, { once: true });
+  return {
+    signal: controller.signal,
+    cleanup() {
+      externalSignal.removeEventListener('abort', forward);
+    },
+  };
+}
+
+function translateAbort(err, externalSignal, timeoutMs) {
+  if (err?.name !== 'AbortError' && err?.code !== 'ABORTED') return null;
+  if (externalSignal?.aborted) return new UpstreamError('Request cancelled', { code: 'ABORTED' });
+  return new UpstreamError(`Upstream timed out after ${timeoutMs}ms`, { code: 'TIMEOUT', retryable: true });
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 
 // ============================================================================
@@ -408,8 +498,13 @@ function cookieFromResponse(res, prior = '') {
     const i = c.indexOf('=');
     if (i > 0) pairs.set(c.slice(0, i).trim(), c.slice(i + 1).trim());
   }
-  const setCookies =
-    typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
+  let setCookies = [];
+  if (typeof res.headers.getSetCookie === 'function') {
+    setCookies = res.headers.getSetCookie();
+  } else {
+    const combined = res.headers.get?.('set-cookie');
+    if (combined) setCookies = splitSetCookieHeader(combined);
+  }
   for (const sc of setCookies) {
     const first = sc.split(';')[0];
     const i = first.indexOf('=');
@@ -418,62 +513,99 @@ function cookieFromResponse(res, prior = '') {
   return [...pairs.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
 }
 
+function splitSetCookieHeader(value) {
+  return String(value || '').split(/,(?=\s*[^=;,\s]+\s*=)/);
+}
+
 /**
  * Log in to deepai.org with email + password (the site's own login dialect:
  * POST /daily-time-sync/login/ with FormData username/password).
  *
  * @returns {Promise<{ok:boolean, status:number, cookie:string, body:string}>}
  */
-async function loginAccount(email, password) {
+async function loginAccount(email, password, opts = {}) {
   const base = { Origin: CONFIG.upstream.origin, Referer: `${CONFIG.upstream.origin}/`, 'User-Agent': CONFIG.upstream.userAgent };
+  const timeoutMs = opts.timeoutMs || CONFIG.upstream.timeoutMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const combined = combineAbortSignals(controller, opts.signal);
 
-  // Bootstrap: preflight the auth surface so the csrftoken cookie exists,
-  // exactly like any page load before the login modal does.
-  let priorCookie = '';
   try {
-    const pre = await fetch(`${CONFIG.upstream.baseUrl}/daily-time-sync/user/`, {
-      method: 'GET',
-      headers: { ...base, 'api-key': mintTryItKey(CONFIG.upstream.userAgent), Accept: '*/*' },
-    });
-    priorCookie = cookieFromResponse(pre);
-  } catch {
-    /* proceed without preflight */
-  }
+    // Bootstrap: preflight the auth surface so the csrftoken cookie exists,
+    // exactly like any page load before the login modal does.
+    let priorCookie = '';
+    try {
+      const pre = await fetch(`${CONFIG.upstream.baseUrl}/daily-time-sync/user/`, {
+        method: 'GET',
+        headers: { ...base, 'api-key': mintTryItKey(CONFIG.upstream.userAgent), Accept: '*/*' },
+        signal: combined.signal,
+        redirect: 'error',
+      });
+      priorCookie = cookieFromResponse(pre);
+    } catch (err) {
+      if (combined.signal.aborted) throw err;
+      /* proceed without preflight */
+    }
 
-  const form = new FormData();
-  form.append('username', String(email || ''));
-  form.append('password', String(password || ''));
-  const res = await fetch(`${CONFIG.upstream.baseUrl}/daily-time-sync/login/`, {
-    method: 'POST',
-    body: form,
-    headers: { ...base, Accept: '*/*', ...(priorCookie ? { Cookie: priorCookie } : {}) },
-  });
-  const body = await res.text().catch(() => '');
-  const cookie = cookieFromResponse(res, priorCookie);
-  if (!res.ok) {
-    return { ok: false, status: res.status, cookie, body: body.slice(0, 300) };
+    const form = new FormData();
+    form.append('username', String(email || ''));
+    form.append('password', String(password || ''));
+    const res = await fetch(`${CONFIG.upstream.baseUrl}/daily-time-sync/login/`, {
+      method: 'POST',
+      body: form,
+      headers: { ...base, Accept: '*/*', ...(priorCookie ? { Cookie: priorCookie } : {}) },
+      signal: combined.signal,
+      redirect: 'error',
+    });
+    const body = await res.text();
+    const cookie = cookieFromResponse(res, priorCookie);
+    if (!res.ok) {
+      return { ok: false, status: res.status, cookie, body: body.slice(0, 300) };
+    }
+    return { ok: true, status: res.status, cookie, body: body.slice(0, 300) };
+  } catch (err) {
+    const aborted = translateAbort(err, opts.signal, timeoutMs);
+    if (aborted) throw aborted;
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    combined.cleanup();
   }
-  return { ok: true, status: res.status, cookie, body: body.slice(0, 300) };
 }
 
 /**
  * Query the logged-in user object (GET /daily-time-sync/user/).
  * @returns {Promise<{ok:boolean, user:object|null, status:number}>}
  */
-async function fetchUser(cookie, deviceId) {
+async function fetchUser(cookie, deviceId, opts = {}) {
   const client = new DeepAIClient({ cookie, deviceId });
-  const res = await fetch(`${CONFIG.upstream.baseUrl}/daily-time-sync/user/`, {
-    method: 'GET',
-    headers: client.headers(),
-  });
-  const body = await res.text().catch(() => '');
-  let user = null;
+  const timeoutMs = opts.timeoutMs || CONFIG.upstream.timeoutMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const combined = combineAbortSignals(controller, opts.signal);
   try {
-    user = JSON.parse(body);
-  } catch {
-    /* not JSON */
+    const res = await fetch(`${CONFIG.upstream.baseUrl}/daily-time-sync/user/`, {
+      method: 'GET',
+      headers: client.headers(),
+      signal: combined.signal,
+      redirect: 'error',
+    });
+    const body = await res.text();
+    let user = null;
+    try {
+      user = JSON.parse(body);
+    } catch {
+      /* not JSON */
+    }
+    return { ok: res.ok && Boolean(user), user, status: res.status };
+  } catch (err) {
+    const aborted = translateAbort(err, opts.signal, timeoutMs);
+    if (aborted) throw aborted;
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    combined.cleanup();
   }
-  return { ok: res.ok && Boolean(user), user, status: res.status };
 }
 
 module.exports = { DeepAIClient, UpstreamError, classifyRefusal, detectJsonStatus, loginAccount, fetchUser, cookieFromResponse };

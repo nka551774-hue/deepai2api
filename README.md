@@ -1,7 +1,7 @@
 # deepai2api
 
-> 面板 UI 改编自 [workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)(MIT License,© ardeyouxipianyi)——登录闸门 / 侧边导航
-> (总览·网关·账号·分析·日志·设置)/ 组件样式原样沿用,数据层对接本网关的 DeepAI 账号池。
+> 管理面板參考 [workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub) 的版面與操作流程，繼續使用 DeepAI 上游。
+> 參考版本與 MIT 授權見 `THIRD_PARTY_NOTICES.md`。
 
 將 [deepai.org](https://deepai.org/chat) 的 AI Chat 反向代理成 **OpenAI 相容 API**,附帶多帳號池(帳號池輪替)與 Web 管理面板。零執行期依賴(純 Node.js 18+),支援 Docker 一鍵部署。
 
@@ -16,45 +16,83 @@ deepai.org chat ──反代──> deepai2api ──OpenAI 格式──> 任何
   - `GET  /v1/models`
   - `POST /v1/chat/completions`(支援 `stream: true`,reasoning 模型的思維鏈會以 `reasoning_content` delta 串流輸出)
   - `POST /v1/images/generations`(對接上游內建生圖工具 / `/api/text2img`)
-- **上游帳號池(workbuddy 式)**:多帳號輪替、LRU 排程、同一對話黏住同一帳號、配額自動冷卻、錯誤自動停用、單鍵測試。三種帳號型態:
+- **上游帳號池**：依帳號權重與使用次數輪替，同一對話優先沿用原帳號。配額耗盡時冷卻，憑證失效時嘗試重登或停用。支援三種帳號類型：
   - **Cookie 匯入**:登入 deepai.org 後,從 DevTools 複製 `api.deepai.org` 任一請求的整行 `cookie:` 貼進面板即可
   - **Email 帳密**:面板填帳密,閘道走官網同款登入流程自動登入、保管 session、過期自動重登
   - **API Key(舊模式)**:deepai dashboard 的持久金鑰
 - **匿名 fallback**:池空時自動鑄造單次 `tryit-` 匿名金鑰模擬瀏覽器訪客(每請求以 UA 雜湊重新鑄造,與瀏覽器一致)
-- **Web 管理面板**:登入保護、總覽統計、帳號池管理(Cookie/帳密)、下游 API 金鑰簽發(可限制模型白名單 / 請求上限)、請求日誌、模型映射設定
 - **對話一致性**:同一對話自動黏住同一把上游 key 與 session uuid
 - **持久化**:狀態(JSON)寫入 `data/state.json`,原子寫入、重啟不丟失
+- **完整帳號管理**:Cookie／帳密／API Key、搜尋篩選與分頁、備註與分組、權重調度、批次測試／重登／啟停／重設、JSON 匯入匯出。環境變數預載與匯入均去重。
+- **分類設定**:基礎、API、模型、穩定性及日誌系統分組；主題、介面語言、可見頁籤、區塊限高與刷新間隔。
+- **下游權限**:API Key 可限制模型（支援 `*` 萬用字元）、上游帳號白名單及請求上限；並發請求也會預先計數，失敗請求同樣計入上限。
 
-## 快速開始(Docker)
+## 快速開始（Docker Compose）
+
+複製 `.env.example` 為 `.env`，修改 `ADMIN_PASSWORD`，再啟動：
 
 ```bash
 cd 2api
+cp .env.example .env
+# 編輯 .env，設定自己的 ADMIN_PASSWORD
 docker compose up -d --build
 ```
 
-或直接用 CI 自動發佈到 GHCR 的預構建映像(每次 push 到 main 都會重新建置 linux/amd64 + linux/arm64):
+Windows PowerShell 的複製指令是 `Copy-Item .env.example .env`。既有部署若已有 `.env`，直接編輯原檔。
+
+使用 GHCR 預建映像：
 
 ```bash
-docker run -d --name deepai2api -p 3737:3737   -e ADMIN_PASSWORD=你的面板密碼   -v ./data:/app/data   ghcr.io/nka551774-hue/deepai2api:latest
+docker compose pull
+docker compose up -d --no-build
+docker compose ps
+docker compose logs --tail=100
 ```
+
+推送到 `main` 後，CI 會先跑離線測試與容器驗證，再發布 `linux/amd64`、`linux/arm64` 映像。除了 `latest`，也會產生 `sha-…` 標籤；可在 `.env` 的 `IMAGE` 指定固定標籤後執行相同更新指令。
+
+帳號、金鑰和面板設定仍存放在 `./data/state.json`，升級沿用原有資料。啟動時會修正資料夾及兩個狀態檔的擁有者，再以 `app` 使用者執行 Node；不會遞迴改動其他檔案。備份時先執行 `docker compose stop`，複製 `data` 資料夾，再以 `docker compose start` 啟動。
+
+`.env` 的 `PUBLISH_PORT` 控制主機對外埠，`BIND_ADDRESS` 控制主機監聽位址；容器內固定使用 3737。`TZ` 預設為 `Asia/Taipei`。Compose 會載入 `.env`，直接 `npm start` 則使用目前程序的環境變數。
 
 - 面板:<http://localhost:3737/>(密碼取自 `ADMIN_PASSWORD`,預設 `deepai2api`)
 - API base:`http://localhost:3737/v1`
 
-本機直接跑(需 Node.js 18+):
+Windows 本機啟動（PowerShell，建議 Node.js 24；保留 Node.js 18 相容性測試）：
+
+```powershell
+Set-Location 'C:\Users\User\Desktop\2api'
+$env:ADMIN_PASSWORD = '請換成自己的密碼'
+npm start
+```
+
+開啟 `http://localhost:3737/`，使用設定的面板密碼登入。若曾在面板內改密碼，請用儲存後的新密碼。
+
+離線驗證（無需帳號、無需安裝套件）：
 
 ```bash
-node server.js
+npm test
 ```
+
+測試使用隔離狀態目錄與本機模擬上游。它們不代表真實 DeepAI 登入、生圖或上游風控已通過。
+
+Docker 容器驗證（需已啟動 Docker Engine；會建立並清除獨立的測試容器與 volume）：
+
+```bash
+docker build -t deepai2api:verify .
+node scripts/docker-smoke.js deepai2api:verify
+```
+
+檢查內容包含健康檢查、靜態資源、非 root 程序、時區、帳號／金鑰／設定的重啟持久化及正常停止。
 
 ## 加入帳號到池(擇一)
 
 deepai.org 的 chat **沒有持有式的 API key**:瀏覽器永遠只帶每次新生成的單次 `tryit` key(`api-key` header)+ 登入 session cookie(`credentials: include`)。帳號身份 = cookie。所以池以「帳號」為單位:
 
 1. **匿名模式(零設定)**:池留空 + `ALLOW_ANONYMOUS_FALLBACK=true`,閘道每個請求自動鑄造匿名單次 `tryit` key 模擬訪客。免登入但可能被上游風控。
-2. **Cookie 匯入(建議)**:登入 deepai.org → F12 → Network → 隨便點一個 `api.deepai.org` 的請求 → Request Headers → 複製整行 `cookie:` → 面板「帳號池 → 瀏覽器 Cookie 匯入」貼上。可多行(一行一個帳號)。
-3. **Email 帳密**:面板填 deepai.org 的 Email + 密碼,閘道以官網同款流程(`POST /daily-time-sync/login/`)自動登入並保管 session,cookie 過期自動重登。
-4. **API Key(舊模式)**:deepai dashboard 的持久金鑰,`UPSTREAM_KEYS` 環境變數或 `ACCOUNT_COOKIES`(每行一個 cookie)也可開機預載。
+2. **Cookie 匯入**：登入 deepai.org → F12 → Network → 選取 `api.deepai.org` 的請求 → Request Headers → 複製 `cookie:` → 面板「帳號 → 新增帳號 → Cookie」貼上，每行一個帳號。
+3. **Email 帳密**：面板「帳號 → 新增帳號 → 帳號密碼」輸入 DeepAI Email 和密碼。閘道儲存工作階段，Cookie 失效時會嘗試重登。
+4. **API Key（舊模式）**：在新增帳號時選 API Key，填入 DeepAI 的持久金鑰。也可透過 `UPSTREAM_KEYS` 或 `ACCOUNT_COOKIES` 環境變數預載。
 
 > 本專案僅供協定學習與個人研究,請遵守上游服務條款;請勿使用主帳號、勿商業轉售。上游隨時可能收緊風控,使用造成的任何後果自負。
 
@@ -95,15 +133,26 @@ for chunk in r:
 
 未簽發任何 API 金鑰前,`/v1/*` 為開放模式(`ALLOW_OPEN_WHEN_NO_KEYS=true` 時);在面板簽發第一把 `sk-deepai-…` 後,所有請求都必須攜帶金鑰。
 
+`/v1/models` 同樣驗證金鑰並依模型白名單過濾。設定帳號白名單的 Key 只可調度指定帳號，帳號全數不可用時會回報錯誤，不會改用匿名訪客。
+
+多輪對話預設以第一則使用者訊息、前置系統訊息、模型及下游 Key 推導識別。若同一 Key 會同時處理多個相同開場的對話，請在每一輪傳入不同且固定的 `session_key`，避免它們被視為同一對話。不同 Key 的識別彼此隔離。
+
 ## 管理面板
 
 | 頁籤 | 功能 |
 | --- | --- |
 | 總覽 | 請求量、錯誤率、輸出字元、模型統計、上游池健康 |
-| 帳號池 | 匯入 Cookie / 帳密登入、啟停/重登/測試、冷卻與錯誤一覽 |
-| API 金鑰 | 簽發給下游的 `sk-deepai-…`,模型白名單與請求上限 |
-| 請求日誌 | 最近 500 筆請求(模型、金鑰、狀態、耗時、預覽/錯誤) |
-| 設定 | 預設模型、模型映射 JSON、上游超時 |
+| 閘道 | API 位址、對話和生圖端點、模型目錄 |
+| 帳號 | 新增與篩選、分組和權重、批次操作、JSON 備份與還原 |
+| 分析 | 今日、近 7 天及近 30 天的請求量、模型與金鑰用量 |
+| 日誌 | 搜尋請求紀錄，查看模型、狀態、耗時及錯誤 |
+| 設定 | 簽發及管理下游金鑰、模型映射、請求逾時、密碼與介面偏好 |
+
+面板設定會持久化並優先於對應環境預設值；匿名回退、首次開放模式及日誌筆數可在設定中修改。模型映射、超時與數值範圍會在儲存前驗證，錯誤輸入不會部分套用。
+
+匯出的帳號 JSON 含登入憑證；請妥善保管。清單 API 不回傳完整上游憑證。修改面板密碼需提供目前密碼，其他已登入工作階段隨即失效。
+
+若現有 `state.json` 損毀或無法讀取，服務會停止啟動並保留原檔，避免以空帳號和開放模式覆寫資料。
 
 ## 環境變數
 

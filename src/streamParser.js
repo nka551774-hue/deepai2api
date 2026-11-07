@@ -81,10 +81,16 @@ class StreamParser {
       } else {
         const body = text.slice(start + THINK_START.length);
         const sep = body.indexOf(RS);
-        thinkingText = sep !== -1 ? body.slice(sep + 1) : '';
+        thinkingText = sep !== -1 ? withholdPartialMarker(body.slice(sep + 1), THINK_END) : '';
       }
       text = text.slice(0, start) + after;
     }
+
+    // A stream chunk may end in the middle of a multi-character marker. Keep
+    // that ambiguous suffix buffered instead of exposing it as prose; the
+    // next parse of the accumulated body will either complete the marker or
+    // prove it was ordinary text.
+    text = withholdPartialMarker(text, THINK_START);
 
     // Strip stray separators so partial packets never ship.
     text = text.replace(/[\u001C\u001D\u001E]/g, '');
@@ -116,6 +122,14 @@ class StreamParser {
     }
     return urls;
   }
+}
+
+function withholdPartialMarker(value, marker) {
+  const max = Math.min(value.length, marker.length - 1);
+  for (let length = max; length > 0; length -= 1) {
+    if (marker.startsWith(value.slice(-length))) return value.slice(0, -length);
+  }
+  return value;
 }
 
 module.exports = { StreamParser };

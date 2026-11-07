@@ -27,6 +27,7 @@ const { mintTryItKey, randomDeviceId } = require('./islandHash');
 
 const COOLDOWN_MS = 90 * 1000; // soft errors → short park
 const EXHAUSTED_RECHECK_MS = 6 * 3600 * 1000; // quota → long park, panel can reset
+const MAX_STICKY_SESSIONS = 4096;
 
 class AccountPool {
   /**
@@ -51,7 +52,15 @@ class AccountPool {
   addCookieAccount(cookie, name = '') {
     cookie = sanitizeCookieHeader(cookie);
     if (!cookie) throw new Error('Cookie is required ("name=value; name2=value2")');
-    return this._addAccount({ type: 'cookie', cookie, name });
+    this._assertUniqueIdentity({ type: 'cookie', cookie });
+    return this._addAccount({ type: 'cookie', cookie, name: cleanLabel(name) });
+  }
+
+  addApiKeyAccount(apiKey, name = '') {
+    apiKey = String(apiKey || '').trim();
+    if (!apiKey) throw new Error('API key is required');
+    this._assertUniqueIdentity({ type: 'apikey', apiKey });
+    return this._addAccount({ type: 'apikey', apiKey, name: cleanLabel(name) });
   }
 
   /**
@@ -59,8 +68,9 @@ class AccountPool {
    * so bad credentials fail immediately.
    */
   async addLoginAccount(email, password, name = '') {
-    email = String(email || '').trim();
+    email = normalizeEmail(email);
     if (!email || !password) throw new Error('Email and password are required');
+    this._assertUniqueIdentity({ type: 'login', email });
     const result = await loginAccount(email, password);
     if (!result.ok) {
       const detail =
@@ -74,13 +84,23 @@ class AccountPool {
     if (!result.cookie || !/session/i.test(result.cookie)) {
       throw new Error('Login succeeded but no session cookie was returned');
     }
-    return this._addAccount({ type: 'login', email, password, cookie: result.cookie, name: name || email, cookieUpdatedAt: new Date().toISOString() });
+    return this._addAccount({
+      type: 'login',
+      email,
+      password: String(password),
+      cookie: sanitizeCookieHeader(result.cookie),
+      name: cleanLabel(name) || email,
+      cookieUpdatedAt: new Date().toISOString(),
+    });
   }
 
   _addAccount(fields) {
+    const weight = validateWeight(fields.weight ?? 1);
     const entry = {
       id: crypto.randomUUID(),
       name: '',
+      group: '',
+      weight: 1,
       type: 'cookie',
       cookie: '',
       email: '',
@@ -99,10 +119,88 @@ class AccountPool {
       cookieUpdatedAt: null,
       createdAt: new Date().toISOString(),
       ...fields,
+      name: cleanLabel(fields.name),
+      group: cleanLabel(fields.group),
+      weight,
     };
+    this._assertUniqueIdentity(entry);
     this.list().push(entry);
     this.store.save();
     return entry;
+  }
+
+  updateAccount(id, patch = {}) {
+    const entry = this.get(id);
+    if (!entry) throw new Error('Account not found');
+    if (Object.prototype.hasOwnProperty.call(patch, 'name')) entry.name = cleanLabel(patch.name);
+    if (Object.prototype.hasOwnProperty.call(patch, 'group')) entry.group = cleanLabel(patch.group);
+    if (Object.prototype.hasOwnProperty.call(patch, 'weight')) entry.weight = validateWeight(patch.weight);
+    this.store.save();
+    return entry;
+  }
+
+  async importAccount(record = {}) {
+    const type = String(record.type || '').toLowerCase();
+    const common = {
+      name: cleanLabel(record.name),
+      group: cleanLabel(record.group),
+      weight: validateWeight(record.weight ?? 1),
+      status: record.status === 'disabled' ? 'disabled' : 'active',
+    };
+
+    if (type === 'apikey') {
+      const apiKey = String(record.apiKey || '').trim();
+      if (!apiKey) throw new Error('API key is required');
+      this._assertUniqueIdentity({ type, apiKey });
+      return this._addAccount({ ...common, type, apiKey });
+    }
+    if (type === 'cookie') {
+      const cookie = sanitizeCookieHeader(record.cookie);
+      if (!cookie) throw new Error('Cookie is required');
+      this._assertUniqueIdentity({ type, cookie });
+      return this._addAccount({ ...common, type, cookie });
+    }
+    if (type === 'login') {
+      const email = normalizeEmail(record.email);
+      const password = String(record.password || '');
+      const cookie = sanitizeCookieHeader(record.cookie);
+      if (!email) throw new Error('Email is required');
+      if (!cookie && !password) throw new Error('Password is required when no session cookie is provided');
+      this._assertUniqueIdentity({ type, email });
+      if (cookie) {
+        return this._addAccount({
+          ...common,
+          type,
+          email,
+          password,
+          cookie,
+          name: common.name || email,
+          cookieUpdatedAt: new Date().toISOString(),
+        });
+      }
+      const account = await this.addLoginAccount(email, password, common.name || email);
+      account.group = common.group;
+      account.weight = common.weight;
+      account.status = common.status;
+      this.store.save();
+      return account;
+    }
+    throw new Error('Account type must be cookie, login, or apikey');
+  }
+
+  exportAccounts(ids) {
+    const selected = Array.isArray(ids) && ids.length ? new Set(ids.map(String)) : null;
+    return this.list()
+      .filter((entry) => !selected || selected.has(entry.id))
+      .map((entry) => portableAccount(entry));
+  }
+
+  _assertUniqueIdentity(candidate) {
+    const identity = accountIdentity(candidate);
+    if (!identity) return;
+    if (this.list().some((entry) => entry !== candidate && accountIdentity(entry) === identity)) {
+      throw new Error('Account already exists');
+    }
   }
 
   removeAccount(id) {
@@ -140,7 +238,17 @@ class AccountPool {
 
   usable() {
     const now = Date.now();
-    return this.list().filter((a) => a.status === 'active' && (!a.cooldownUntil || a.cooldownUntil <= now));
+    return this.list()
+      .filter((a) => a.status === 'active' && (!a.cooldownUntil || a.cooldownUntil <= now))
+      .sort((a, b) => {
+        const score = accountScore(a) - accountScore(b);
+        if (score) return score;
+        const used = timeValue(a.lastUsedAt) - timeValue(b.lastUsedAt);
+        if (used) return used;
+        const created = timeValue(a.createdAt) - timeValue(b.createdAt);
+        if (created) return created;
+        return String(a.id || '').localeCompare(String(b.id || ''));
+      });
   }
 
   // ---------------------------------------------------------------- health
@@ -180,9 +288,9 @@ class AccountPool {
   }
 
   /** Re-run the upstream login for a `login`-type account. */
-  async refreshLogin(entry) {
+  async refreshLogin(entry, opts = {}) {
     if (entry.type !== 'login') return { ok: false, message: 'Not an email/password account' };
-    const result = await loginAccount(entry.email, entry.password);
+    const result = await loginAccount(entry.email, entry.password, opts);
     if (!result.ok) {
       entry.lastErrorMessage = `Auto re-login failed (HTTP ${result.status})`;
       this.store.save();
@@ -191,7 +299,7 @@ class AccountPool {
     if (!result.cookie) return { ok: false, message: 'Re-login returned no session cookie' };
     entry.cookie = result.cookie;
     entry.cookieUpdatedAt = new Date().toISOString();
-    const info = await fetchUser(entry.cookie, entry.deviceId);
+    const info = await fetchUser(entry.cookie, entry.deviceId, opts);
     if (info.ok) entry.userInfo = info.user;
     entry.lastErrorMessage = '';
     entry.cooldownUntil = null;
@@ -208,8 +316,10 @@ class AccountPool {
    * @param {object} opts — DeepAIClient.chat opts plus sessionKey
    */
   async chat(messages, opts) {
-    const sessionAccount = opts.sessionKey ? this.sessionAccountMap.get(opts.sessionKey) : null;
-    const usable = this.usable();
+    opts = opts || {};
+    const sessionAccount = opts.sessionKey ? this._stickyAccount(opts.sessionKey) : null;
+    const restriction = requestedAccountIds(opts.accountIds);
+    const usable = this.usable().filter((entry) => !restriction || restriction.has(entry.id));
     const ordered = [];
     if (sessionAccount) {
       const sticky = usable.find((a) => a.id === sessionAccount);
@@ -219,8 +329,18 @@ class AccountPool {
 
     let lastErr = null;
     for (const entry of ordered) {
+      let emitted = false;
+      const attemptOpts = opts.onDelta
+        ? {
+            ...opts,
+            onDelta: (...args) => {
+              if (args[0] || args[2]) emitted = true;
+              opts.onDelta(...args);
+            },
+          }
+        : opts;
       try {
-        const result = await this._chatWithAccount(entry, messages, opts);
+        const result = await this._chatWithAccount(entry, messages, attemptOpts);
         result.upstreamKeyId = entry.id;
         result.upstreamAnonymous = false;
         result.upstreamAccount = accountLabel(entry);
@@ -228,18 +348,29 @@ class AccountPool {
       } catch (err) {
         lastErr = err;
         this._recordFailure(entry, err);
+        if (emitted) throw err;
         // A dead session is worth one automatic re-login before moving on.
         if (err.code === 'LOGIN_REQUIRED' || err.code === 'SESSION_EXPIRED') {
-          const re = await this.refreshLogin(entry);
+          let re;
+          try {
+            re = await this.refreshLogin(entry, opts);
+          } catch (refreshError) {
+            lastErr = refreshError;
+            this._recordFailure(entry, refreshError);
+            if (opts.signal?.aborted || isTerminalError(refreshError)) throw refreshError;
+            continue;
+          }
           if (re.ok) {
             try {
-              const result = await this._chatWithAccount(entry, messages, opts);
+              const result = await this._chatWithAccount(entry, messages, attemptOpts);
               result.upstreamKeyId = entry.id;
               result.upstreamAnonymous = false;
               result.upstreamAccount = accountLabel(entry);
               return result;
             } catch (err2) {
               this._recordFailure(entry, err2);
+              lastErr = err2;
+              if (emitted || isTerminalError(err2)) throw err2;
             }
           }
           continue;
@@ -251,7 +382,7 @@ class AccountPool {
     }
 
     // Anonymous single-use fallback.
-    if (CONFIG.allowAnonymousFallback) {
+    if (!restriction && this._allowAnonymousFallback()) {
       const anon = { cookie: '', deviceId: randomDeviceId() };
       const result = await this._chatWithAccount(anon, messages, opts, true);
       result.upstreamKeyId = 'anonymous';
@@ -282,33 +413,57 @@ class AccountPool {
       this.store.save();
     }
     const result = await client.chat(messages, { ...opts, sessionUuid });
-    if (opts.sessionKey && !isAnon) this.sessionAccountMap.set(opts.sessionKey, entry.id);
+    if (opts.sessionKey && !isAnon) this._rememberStickyAccount(opts.sessionKey, entry.id);
     return result;
+  }
+
+  _stickyAccount(sessionKey) {
+    const accountId = this.sessionAccountMap.get(sessionKey);
+    if (!accountId) return null;
+    this.sessionAccountMap.delete(sessionKey);
+    this.sessionAccountMap.set(sessionKey, accountId);
+    return accountId;
+  }
+
+  _rememberStickyAccount(sessionKey, accountId) {
+    this.sessionAccountMap.delete(sessionKey);
+    this.sessionAccountMap.set(sessionKey, accountId);
+    while (this.sessionAccountMap.size > MAX_STICKY_SESSIONS) {
+      this.sessionAccountMap.delete(this.sessionAccountMap.keys().next().value);
+    }
   }
 
   // ---------------------------------------------------------------- runApi
 
   /** Classic /api/<name> (text2img …) with the same failover order. */
-  async runApi(name, fields) {
-    for (const entry of this.usable()) {
+  async runApi(name, fields, opts = {}) {
+    const restriction = requestedAccountIds(opts.accountIds);
+    let lastErr = null;
+    for (const entry of this.usable().filter((account) => !restriction || restriction.has(account.id))) {
       try {
-        const out = await this._clientFor(entry).runApi(name, fields);
+        const out = await this._clientFor(entry).runApi(name, fields, { timeoutMs: opts.timeoutMs, signal: opts.signal });
         entry.uses += 1;
         entry.lastUsedAt = new Date().toISOString();
         this.store.save();
         return { ...out, upstreamAccountId: entry.id, upstreamAnonymous: false };
       } catch (err) {
+        lastErr = err;
         this._recordFailure(entry, err);
         if (err.code === 'BAD_KEY' || err.code === 'PLAN_REQUIRED' || err.code === 'LOGIN_REQUIRED') continue;
         if (!err.retryable && err.code !== 'QUOTA' && err.code !== 'UPSTREAM_REJECTED') throw err;
       }
     }
-    if (CONFIG.allowAnonymousFallback) {
+    if (!restriction && this._allowAnonymousFallback()) {
       const client = new DeepAIClient({ cookie: '', deviceId: randomDeviceId() });
-      const out = await client.runApi(name, fields);
+      const out = await client.runApi(name, fields, { timeoutMs: opts.timeoutMs, signal: opts.signal });
       return { ...out, upstreamAccountId: 'anonymous', upstreamAnonymous: true };
     }
+    if (lastErr) throw lastErr;
     throw new UpstreamError('No usable upstream accounts in the pool', { code: 'NO_ACCOUNTS', retryable: false });
+  }
+
+  _allowAnonymousFallback() {
+    return this.store.state.settings?.allowAnonymousFallback ?? CONFIG.allowAnonymousFallback;
   }
 
   _clientFor(entry) {
@@ -332,12 +487,90 @@ class AccountPool {
 }
 
 function sanitizeCookieHeader(raw) {
-  return String(raw || '')
+  const pairs = new Map();
+  for (const segment of String(raw || '')
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/^cookie:\s*/i, ''))
     .filter(Boolean)
     .join('; ')
-    .replace(/;\s*$/g, '');
+    .replace(/;\s*$/g, '')
+    .split(/;\s*/)) {
+    const index = segment.indexOf('=');
+    if (index <= 0) continue;
+    const name = segment.slice(0, index).trim();
+    const value = segment.slice(index + 1).trim();
+    if (name) pairs.set(name, value);
+  }
+  return [...pairs.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, value]) => `${name}=${value}`)
+    .join('; ');
+}
+
+function cleanLabel(value) {
+  return String(value || '').trim();
+}
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function validateWeight(value) {
+  const weight = Number(value);
+  if (!Number.isInteger(weight) || weight < 1 || weight > 100) {
+    throw new Error('Account weight must be an integer from 1 to 100');
+  }
+  return weight;
+}
+
+function accountIdentity(entry) {
+  if (!entry) return '';
+  if (entry.type === 'apikey') {
+    const apiKey = String(entry.apiKey || '').trim();
+    return apiKey ? `apikey:${apiKey}` : '';
+  }
+  if (entry.type === 'login') {
+    const email = normalizeEmail(entry.email);
+    return email ? `login:${email}` : '';
+  }
+  if (entry.type === 'cookie') {
+    const cookie = sanitizeCookieHeader(entry.cookie);
+    return cookie ? `cookie:${cookie}` : '';
+  }
+  return '';
+}
+
+function portableAccount(entry) {
+  const common = { type: entry.type, name: cleanLabel(entry.name) };
+  if (cleanLabel(entry.group)) common.group = cleanLabel(entry.group);
+  if (validateWeight(entry.weight ?? 1) !== 1) common.weight = validateWeight(entry.weight);
+  common.status = entry.status === 'disabled' ? 'disabled' : 'active';
+  if (entry.type === 'apikey') return { type: 'apikey', apiKey: entry.apiKey, ...common };
+  if (entry.type === 'login') {
+    return { type: 'login', email: entry.email, password: entry.password, cookie: entry.cookie, ...common };
+  }
+  return { type: 'cookie', cookie: entry.cookie, ...common };
+}
+
+function accountScore(entry) {
+  const uses = Number.isFinite(Number(entry.uses)) ? Number(entry.uses) : 0;
+  const weight = Number.isInteger(Number(entry.weight)) && Number(entry.weight) >= 1 ? Number(entry.weight) : 1;
+  return uses / weight;
+}
+
+function timeValue(value) {
+  if (!value) return 0;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function requestedAccountIds(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return null;
+  return new Set(ids.map(String));
+}
+
+function isTerminalError(err) {
+  return err?.code === 'TASK_FAILED' || err?.code === 'ABORTED';
 }
 
 function accountLabel(entry) {
@@ -350,11 +583,15 @@ function accountLabel(entry) {
 
 /** Deterministic per-(conversation, account) upstream session uuid. */
 function stableUuidFor(sessionKey, accountId) {
-  return crypto
+  const hex = crypto
     .createHash('sha256')
     .update(`${sessionKey}|${accountId}`)
     .digest('hex')
-    .replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
+    .slice(0, 32);
+  const versioned = `${hex.slice(0, 12)}5${hex.slice(13)}`;
+  const variant = ((parseInt(versioned[16], 16) & 0x3) | 0x8).toString(16);
+  const uuidHex = `${versioned.slice(0, 16)}${variant}${versioned.slice(17)}`;
+  return `${uuidHex.slice(0, 8)}-${uuidHex.slice(8, 12)}-${uuidHex.slice(12, 16)}-${uuidHex.slice(16, 20)}-${uuidHex.slice(20)}`;
 }
 
 module.exports = { AccountPool };

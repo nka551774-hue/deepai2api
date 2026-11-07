@@ -1,290 +1,119 @@
-<!DOCTYPE html>
-<html lang="zh-CN" data-ui="next">
+<!doctype html>
+<html lang="zh-CN" data-ui="next" data-theme="light">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DeepAI 控制台</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23efebe0'/><text x='16' y='22' font-size='13' text-anchor='middle' fill='%23a14427' font-family='monospace'>2api</text></svg>">
-<link rel="stylesheet" href="/style.css">
-<style>html.wb-panel-session #panelGate{display:none!important}</style>
-<script>
-/* 面板会话令牌：首帧判定与 workbuddy 控制台同款语义 ——
-   本地有 token 就先盖住登录闸门，由 bootPanel() 用 /panel/status 复核；
-   过期再把闸门放回屏幕，避免「先画看板再盖住」的闪烁。 */
-const PANEL_STORE = 'wb-proxy-panel-token';
-const PANEL_REMEMBER_KEY = 'wb-proxy-panel-remember';
-(function(){
-  var panelToken = '';
-  try { panelToken = sessionStorage.getItem(PANEL_STORE) || ''; } catch(e){}
-  try { panelToken = panelToken || localStorage.getItem(PANEL_STORE) || ''; } catch(e){}
-  if(panelToken) document.documentElement.classList.add('wb-panel-session');
-})();
-</script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>DeepAI API Hub</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%234f46e5'/><text x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='Arial'>D</text></svg>">
+  <link rel="stylesheet" href="/style.css">
+  <style>html.wb-panel-session #panelGate{display:none!important}</style>
+  <script>
+    (function firstPaint(){
+      try {
+        var token = sessionStorage.getItem('wb-proxy-panel-token') || localStorage.getItem('wb-proxy-panel-token') || '';
+        if (token) document.documentElement.classList.add('wb-panel-session');
+        var pref = localStorage.getItem('deepai-console-theme') || 'system';
+        var dark = pref === 'dark' || (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme-pref', pref);
+      } catch (error) { /* storage can be unavailable in private contexts */ }
+    })();
+  </script>
 </head>
 <body data-app="deepai2api">
-
-<!-- ================= 登录闸门 ================= -->
-<div id="panelGate" style="position:fixed;inset:0;z-index:600;display:flex;
-     align-items:center;justify-content:center;padding:20px;background:var(--bg)">
-  <div style="width:min(380px,100%);background:var(--panel);border:1px solid var(--line);
-              border-radius:14px;padding:26px 24px;box-shadow:0 10px 30px rgba(15,23,42,.12)">
-    <div style="font-size:16px;font-weight:700;margin-bottom:6px">DeepAI</div>
-    <div style="font-size:12px;color:var(--dim);margin-bottom:18px">请输入面板访问密码</div>
-    <input id="panelPwdInput" type="password" placeholder="面板密码" autocomplete="current-password"
-           onkeydown="if(event.key==='Enter') submitPanelLogin()"
-           style="width:100%;background:var(--panel2);border:1px solid var(--line);
-                  border-radius:8px;padding:9px 12px;color:var(--fg);font:inherit">
-    <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);margin:10px 0 0">
-      <input id="panelRemember" type="checkbox" style="width:15px;height:15px"
-             onchange="panelRememberChanged(this)">
-      保持登录
-    </label>
-    <div id="panelLoginMsg" style="font-size:12px;color:var(--bad);min-height:17px;margin:8px 0 12px"></div>
-    <button type="button" onclick="submitPanelLogin()" class="primary"
-            style="width:100%;padding:10px 12px;border-radius:8px;font-weight:600">进入控制台</button>
-    <div id="panelDefaultHint" style="display:none;font-size:12px;color:var(--warn);margin-top:10px">
-      当前密码仍是默认值（ADMIN_PASSWORD 的缺省 "deepai2api"），请尽快在「设置」里修改。
-    </div>
+  <div id="panelGate" class="panel-gate" aria-labelledby="panelGateTitle">
+    <form id="panelLoginForm" class="panel-login-card" novalidate>
+      <div class="panel-login-brand"><span class="next-brand-mark">D</span><span>DeepAI API Hub</span></div>
+      <h1 id="panelGateTitle" data-i18n="loginTitle">进入控制台</h1>
+      <p data-i18n="loginDescription">使用面板密码管理网关、账号与设置。</p>
+      <label class="field-label" for="panelPwdInput" data-i18n="panelPassword">面板密码</label>
+      <input id="panelPwdInput" type="password" autocomplete="current-password" required>
+      <label class="check-row"><input id="panelRemember" type="checkbox"><span data-i18n="rememberLogin">保持登录</span></label>
+      <div id="panelLoginMsg" class="form-message" role="alert"></div>
+      <button id="panelLoginBtn" class="primary block" type="submit" data-i18n="enterConsole">进入控制台</button>
+      <div id="panelDefaultHint" class="callout warning" hidden data-i18n="defaultPasswordHint">当前仍使用默认面板密码，请登录后立即修改。</div>
+    </form>
   </div>
-</div>
 
-<div id="panelRoot" style="min-height:100vh;display:flex;flex-direction:column">
-
-<!-- ================= 顶栏 ================= -->
-<header>
-  <div class="header-left" style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
-    <h1 id="classicTitle"><span class="dot" id="statusDot"></span>DeepAI 网关</h1>
-    <div class="console-product">
-      <span class="console-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span class="console-wordmark">DeepAI<span>API HUB</span></span>
-    </div>
-    <div class="console-service"><span id="consoleStatusSlot"></span><span>本地网关</span><span class="console-port" id="consolePort">3737</span></div>
-    <a class="gh-link" href="https://github.com/nka551774-hue/deepai2api" target="_blank" rel="noopener noreferrer"
-       title="查看 deepai2api 项目仓库" aria-label="deepai2api 项目仓库">
-      <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-    </a>
-  </div>
-  <div class="header-right" style="margin-left:auto;display:flex;align-items:center;gap:10px">
-    <span id="usersHint" class="hint" style="font-size:12px"></span>
-    <button type="button" class="sec mini" onclick="panelLogout()">退出登录</button>
-  </div>
-</header>
-
-<div style="display:flex;flex:1;min-height:0">
-
-  <!-- ================= 侧边导航 ================= -->
-  <nav class="next-nav" id="nextNav" style="width:210px;padding:10px 8px;border-right:1px solid var(--line);position:sticky;top:57px;align-self:flex-start">
-    <button type="button" class="next-nav-item" data-tab="overview" onclick="nextGo('overview')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-      <span>总览</span>
-    </button>
-    <button type="button" class="next-nav-item" data-tab="gateway" onclick="nextGo('gateway')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.7-3.8-9s1.3-6.4 3.8-9z"/></svg>
-      <span>网关</span>
-    </button>
-    <button type="button" class="next-nav-item" data-tab="accounts" onclick="nextGo('accounts')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c.4-3.2 2.4-5 5.5-5s5.1 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.5c2.7.2 4.3 1.8 4.8 4.5"/></svg>
-      <span>账号</span>
-    </button>
-    <button type="button" class="next-nav-item" data-tab="analytics" onclick="nextGo('analytics')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V5M4 19h16"/><path d="M7 15l3.5-4 3 2.5L20 7"/></svg>
-      <span>分析</span>
-    </button>
-    <button type="button" class="next-nav-item" data-tab="logs" onclick="nextGo('logs')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
-      <span>日志</span>
-    </button>
-    <button type="button" class="next-nav-item" data-tab="settings" onclick="nextGo('settings')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.03z"/></svg>
-      <span>设置</span>
-    </button>
-    <div id="navHealth" style="margin-top:10px;padding:10px 8px;font-size:11px;color:var(--dim);line-height:1.7"></div>
-  </nav>
-
-  <!-- ================= 主内容 ================= -->
-  <div style="flex:1;min-width:0;padding:18px 22px 60px;max-width:1200px">
-
-    <!-- ============ 总览 ============ -->
-    <div id="pageOverview" class="main-page">
-      <h2 style="margin:4px 0 4px">总览</h2>
-      <div class="hint" style="margin-bottom:16px">DeepAI 网关运行状态与今天的第一眼。</div>
-      <div id="ovKpis" class="data-cards" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));display:grid;gap:10px;margin-bottom:16px"></div>
-      <section class="card" style="margin-bottom:16px">
-        <div class="phead" style="display:flex;align-items:center;gap:10px"><h3>模型统计</h3>
-          <span class="mini hint" id="ovRange"></span></div>
-        <div class="table-wrap"><table class="data-cards" id="ovModels"><thead><tr>
-          <th style="text-align:left">模型</th><th style="text-align:right">请求</th><th style="text-align:right">错误</th>
-          <th style="text-align:right">输出字符</th><th style="text-align:right">平均耗时</th>
-        </tr></thead><tbody></tbody></table></div>
-      </section>
-      <section class="card" style="margin-bottom:16px">
-        <div class="phead" style="display:flex;align-items:center;gap:10px"><h3>上游池状态</h3></div>
-        <div id="ovUpstream" class="realm-cards" style="display:flex;flex-wrap:wrap;gap:8px"></div>
-      </section>
-      <section class="card">
-        <div class="phead" style="display:flex;align-items:center;gap:10px"><h3>最近请求</h3></div>
-        <div class="table-wrap"><table class="data-cards" id="ovRecent"><thead><tr>
-          <th style="text-align:left">时间</th><th style="text-align:left">模型</th><th style="text-align:left">Key</th>
-          <th style="text-align:left">状态</th><th style="text-align:right">耗时</th><th style="text-align:left">预览</th>
-        </tr></thead><tbody></tbody></table></div>
-      </section>
-    </div>
-
-    <!-- ============ 网关 ============ -->
-    <div id="pageGateway" class="main-page">
-      <h2 style="margin:4px 0 4px">网关</h2>
-      <div class="hint" style="margin-bottom:16px">OpenAI 兼容模型目录与下游 API Key。</div>
-      <section class="card" style="margin-bottom:16px">
-        <div class="phead" style="display:flex;align-items:center;gap:10px"><h3>模型目录</h3></div>
-        <div class="next-table-scroll"><table class="data-cards" id="gwModels"><thead><tr>
-          <th style="text-align:left;width:30%">对外模型 ID</th><th style="text-align:left;width:30%">上游 model</th>
-          <th style="text-align:left;width:40%">说明</th>
-        </tr></thead><tbody></tbody></table></div>
-        <div class="hint" style="margin-top:10px">base URL：<code class="mono" id="gwBaseUrl"></code> · 用法与 OpenAI 一致（/v1/chat/completions 支持流式）。</div>
-      </section>
-      <section class="card">
-        <div class="phead" style="display:flex;align-items:center;gap:10px"><h3>下游 API Key</h3>
-          <button class="sec mini" onclick="toggleGwCreate()">签发新 Key</button></div>
-        <div id="gwCreate" style="display:none;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px">
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <input id="gwName" placeholder="名称（如 my-nextchat）" style="min-width:160px">
-            <input id="gwModels" placeholder="允许模型，逗号分隔（空=全部）" style="min-width:200px">
-            <input id="gwLimit" type="number" min="0" placeholder="请求上限（0=无限）" style="width:170px">
-            <button class="primary" onclick="createGatewayKey()">签发</button>
-          </div>
-        </div>
-        <div class="table-wrap"><table class="data-cards" id="gwKeys"><thead><tr>
-          <th style="text-align:left">名称</th><th style="text-align:left">Key</th><th style="text-align:left">状态</th>
-          <th style="text-align:right">已用 / 上限</th><th style="text-align:left">允许模型</th><th style="text-align:left">最近使用</th><th style="text-align:right">操作</th>
-        </tr></thead><tbody></tbody></table></div>
-        <div class="hint" style="margin-top:8px">签发第一把 key 之前网关处于开放模式（任何请求可用）；签发后所有 /v1/* 调用都需要 <code class="mono">Authorization: Bearer sk-deepai-…</code>。</div>
-      </section>
-    </div>
-
-    <!-- ============ 账号 ============ -->
-    <div id="pageAccounts" class="main-page">
-      <h2 style="margin:4px 0 4px">账号</h2>
-      <div class="hint" style="margin-bottom:16px">DeepAI 账号池：浏览器 Cookie 匯入或邮箱密码登录，配额耗尽自动轮换下一个账号。</div>
-      <section class="card" style="margin-bottom:16px">
-        <div class="phead" style="display:flex;align-items:center;gap:10px">
-          <button class="range-btn" id="modeBtnCookie" onclick="accMode('cookie')">Cookie 匯入</button>
-          <button class="range-btn" id="modeBtnLogin" onclick="accMode('login')">邮箱密码登录</button>
-        </div>
-        <div id="accBoxCookie" style="display:block">
-          <div class="hint" style="margin:8px 0">登录 <a href="https://deepai.org/zh-hans/chat" target="_blank" rel="noreferrer">deepai.org</a> → F12 → Network → 任选一个 <span class="mono">api.deepai.org</span> 请求 → Request Headers → 复制整行 <span class="mono">cookie:</span> 贴到下面（多账号一行一个）。</div>
-          <textarea id="accCookies" rows="3" class="mono" spellcheck="false"
-            placeholder="deepai_device_id=…; deepai_privacy_prefs=…; deepai_lang=zh-hans; csrftoken=…; sessionid=…" style="width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px 12px;color:var(--fg);font-size:12px"></textarea>
-          <div style="display:flex;gap:8px;margin-top:8px">
-            <input id="accCookieName" placeholder="备注名称（可选）" style="max-width:240px">
-            <button class="primary" onclick="addCookieAccounts()">加入账号池</button>
-          </div>
-        </div>
-        <div id="accBoxLogin" style="display:none">
-          <div class="hint" style="margin:8px 0">填写 DeepAI 账号密码，网关按官网同款流程登录并保管会话；Cookie 过期自动重登。</div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <input id="accLoginEmail" placeholder="邮箱" style="min-width:200px">
-            <input id="accLoginPassword" type="password" placeholder="密码" style="min-width:160px">
-            <button class="primary" id="accLoginBtn" onclick="addLoginAccount()">登录并加入</button>
-          </div>
-        </div>
-      </section>
-      <section class="card">
-        <div class="phead" style="display:flex;align-items:center;gap:10px"><h3>账号池</h3>
-          <span class="mini hint" id="accSummary"></span></div>
-        <div class="table-wrap"><table class="data-cards" id="accTable"><thead><tr>
-          <th style="text-align:left">账号</th><th style="text-align:left">类型</th><th style="text-align:left">状态</th>
-          <th style="text-align:left">方案 / 点数</th><th style="text-align:right">使用</th><th style="text-align:right">错误</th>
-          <th style="text-align:left;width:26%">最近错误</th><th style="text-align:right">操作</th>
-        </tr></thead><tbody></tbody></table></div>
-        <div class="hint" style="margin-top:8px">池为空且开启匿名回退时，网关用一次性访客 tryit key 应答 —— 免登录但可能被上游风控，建议匯入账号。</div>
-      </section>
-    </div>
-
-    <!-- ============ 分析 ============ -->
-    <div id="pageAnalytics" class="main-page">
-      <h2 style="margin:4px 0 4px">分析</h2>
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
-        <button class="range-btn" data-range="today" onclick="setRange('today')">今天</button>
-        <button class="range-btn active" data-range="7d" onclick="setRange('7d')">近 7 天</button>
-        <button class="range-btn" data-range="30d" onclick="setRange('30d')">近 30 天</button>
+  <div id="nextShell">
+    <aside id="nextSidebar" aria-label="主导航">
+      <div class="next-brand"><div class="next-brand-mark">D</div><div class="next-brand-text"><b>DeepAI</b><span>API HUB</span></div></div>
+      <div class="next-nav-label" data-i18n="workspace">工作台</div>
+      <nav class="next-nav" id="nextNav">
+        <button type="button" class="next-nav-item active" data-nav-page="overview"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span data-i18n="navOverview">总览</span></button>
+        <button type="button" class="next-nav-item" data-nav-page="gateway"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg><span data-i18n="navGateway">网关</span></button>
+        <button type="button" class="next-nav-item" data-nav-page="accounts"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c.4-3.2 2.4-5 5.5-5s5.1 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.5c2.7.2 4.3 1.8 4.8 4.5"/></svg><span data-i18n="navAccounts">账号</span></button>
+        <button type="button" class="next-nav-item" data-nav-page="analytics"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16M7 15l3.5-4 3 2.5L20 7"/></svg><span data-i18n="navAnalytics">分析</span></button>
+        <button type="button" class="next-nav-item" data-nav-page="logs"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3M12.5 15H17"/></svg><span data-i18n="navLogs">日志</span></button>
+        <button type="button" class="next-nav-item" data-nav-page="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3A1.7 1.7 0 0 0 14 21v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14h-.2v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9A1.7 1.7 0 0 0 21 10h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></svg><span data-i18n="navSettings">设置</span></button>
+      </nav>
+      <div class="next-sidebar-foot">
+        <a class="next-side-link" href="https://github.com/nka551774-hue/deepai2api" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span data-i18n="repository">项目仓库</span></a>
+        <button type="button" class="next-side-link next-side-danger" data-action="logout"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3M15 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/></svg><span data-i18n="logout">退出登录</span></button>
+        <div class="next-side-status"><span class="next-status-dot"></span><span id="sidebarHealthText" data-i18n="gatewayOnline">网关运行中</span></div>
       </div>
-      <div id="anKpis" class="data-cards" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));display:grid;gap:10px;margin-bottom:16px"></div>
-      <section class="card" style="margin-bottom:16px">
-        <div class="phead"><h3>请求量走势</h3></div>
-        <div id="anChart"></div>
-      </section>
-      <section class="card" style="margin-bottom:16px">
-        <div class="phead"><h3>按模型</h3></div>
-        <div class="table-wrap"><table class="data-cards" id="anModels"><thead><tr>
-          <th style="text-align:left">模型</th><th style="text-align:right">请求</th><th style="text-align:right">错误</th>
-          <th style="text-align:right">输出字符</th><th style="text-align:right">平均耗时</th>
-        </tr></thead><tbody></tbody></table></div>
-      </section>
-      <section class="card">
-        <div class="phead"><h3>按 API Key</h3></div>
-        <div class="table-wrap"><table class="data-cards" id="anKeys"><thead><tr>
-          <th style="text-align:left">Key</th><th style="text-align:right">请求</th><th style="text-align:right">错误</th><th style="text-align:right">错误率</th>
-        </tr></thead><tbody></tbody></table></div>
-      </section>
-    </div>
-
-    <!-- ============ 日志 ============ -->
-    <div id="pageLogs" class="main-page">
-      <h2 style="margin:4px 0 4px">日志</h2>
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-        <input id="logFilter" class="mono" type="search" placeholder="搜索模型 / Key / 错误" style="min-width:200px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--fg)">
-        <select id="logOutcome" onchange="renderLogs()" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px;color:var(--fg)">
-          <option value="">全部结果</option><option value="ok">成功</option><option value="error">失败</option>
-        </select>
-        <button class="sec mini" onclick="toggleLogPoll()" id="logPollBtn">暂停刷新</button>
-        <button class="sec mini danger" onclick="clearLogs()">清空日志</button>
-        <span class="mini hint" id="logCount"></span>
-      </div>
-      <section class="card">
-        <div class="table-wrap"><table class="data-cards" id="logTable"><thead><tr>
-          <th style="text-align:left;width:150px">时间</th><th style="text-align:left">端点</th><th style="text-align:left">模型</th>
-          <th style="text-align:left">Key</th><th style="text-align:left">上游</th><th style="text-align:left">状态</th>
-          <th style="text-align:right">耗时</th><th style="text-align:left;width:24%">预览 / 错误</th>
-        </tr></thead><tbody></tbody></table></div>
-      </section>
-    </div>
-
-    <!-- ============ 设置 ============ -->
-    <div id="pageSettings" class="main-page">
-      <h2 style="margin:4px 0 4px">设置</h2>
-      <section class="card" style="margin-bottom:16px">
-        <div class="phead"><h3>面板密码</h3></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <input id="pwdCurrent" type="password" placeholder="当前密码（默认密码期间可留空）" style="min-width:220px">
-          <input id="pwdNext" type="password" placeholder="新密码" style="min-width:160px">
-          <button class="primary" onclick="changePanelPassword()">修改面板密码</button>
+    </aside>
+    <div id="nextSidebarBackdrop" class="next-sidebar-backdrop" data-action="close-mobile-nav"></div>
+    <div id="nextMain">
+      <header id="nextTopbar">
+        <div class="next-topbar-left"><button type="button" id="nextMenuBtn" class="next-icon-btn next-menu-btn" data-action="toggle-mobile-nav" aria-label="打开导航"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><div class="next-page-heading"><div id="nextPageTitle">总览</div><div id="nextPageDesc">运行状态、账号池与最近请求</div></div></div>
+        <div class="next-topbar-actions"><span class="next-pill"><span class="next-status-dot"></span><span id="topHealthText" data-i18n="healthy">正常</span></span><select id="quickLanguage" class="compact-select" aria-label="界面语言"><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="en">English</option></select><button type="button" id="themeToggleBtn" class="next-icon-btn" data-action="cycle-theme" aria-label="切换主题" title="切换主题"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9c0-.5 0-1-.1-1.5A7 7 0 0 1 12 3z"/></svg></button></div>
+      </header>
+      <div id="nextContent"><main>
+        <div id="pageOverview" class="main-page active" data-page="overview">
+          <div class="next-page-intro"><div><h1 data-i18n="overviewTitle">运行总览</h1><p data-i18n="overviewDesc">网关、账号池和最近请求一屏看完。</p></div><button type="button" class="sec" data-action="refresh-page" data-i18n="refresh">刷新</button></div>
+          <div id="overviewKpis" class="kpi-grid skeleton-grid"></div>
+          <div class="content-grid two-columns"><section><div class="section-head"><div><h2 data-i18n="modelUsage">模型统计</h2><p data-i18n="modelUsageDesc">累计调用与输出字符。</p></div></div><div class="table-wrap"><table><thead><tr><th data-i18n="model">模型</th><th class="num" data-i18n="requests">请求</th><th class="num" data-i18n="errors">错误</th><th class="num" data-i18n="outputChars">输出字符</th></tr></thead><tbody id="overviewModelsBody"></tbody></table></div></section><section><div class="section-head"><div><h2 data-i18n="poolStatus">账号池状态</h2><p data-i18n="poolStatusDesc">可用、停用与冷却账号。</p></div></div><div id="overviewPool" class="status-stack"></div></section></div>
+          <section><div class="section-head"><div><h2 data-i18n="recentRequests">最近请求</h2><p data-i18n="recentRequestsDesc">最新八条网关活动。</p></div><button type="button" class="link-btn" data-nav-page="logs" data-i18n="viewAll">查看全部</button></div><div class="table-wrap"><table><thead><tr><th data-i18n="time">时间</th><th data-i18n="model">模型</th><th data-i18n="apiKey">API Key</th><th data-i18n="status">状态</th><th class="num" data-i18n="latency">耗时</th><th data-i18n="detail">详情</th></tr></thead><tbody id="overviewRecentBody"></tbody></table></div></section>
         </div>
-        <div class="hint" style="margin-top:8px" id="pwdHint"></div>
-      </section>
-      <section class="card" style="margin-bottom:16px">
-        <div class="phead"><h3>网关设定</h3></div>
-        <div style="display:grid;grid-template-columns:220px 1fr;gap:10px 14px;align-items:center">
-          <span class="hint">默认模型</span><input id="setModel">
-          <span class="hint">允许未知模型直通（passthrough）</span><input type="checkbox" id="setPassthrough">
-          <span class="hint">上游超时（毫秒，≥5000）</span><input id="setTimeou" type="number" min="5000" step="1000">
-        </div>
-        <div class="hint" style="margin-top:12px">模型映射（JSON：对外模型 → 上游 model 字段）</div>
-        <textarea id="setModelMap" rows="7" class="mono" spellcheck="false" style="width:100%;margin-top:6px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg);font-size:12px"></textarea>
-        <div style="margin-top:10px"><button class="primary" onclick="saveSettings()">保存设定</button>
-          <span class="hint" id="setMsg" style="margin-left:10px"></span></div>
-      </section>
-      <section class="card">
-        <div class="phead"><h3>环境与部署</h3></div>
-        <div id="envFacts" class="hint" style="line-height:2"></div>
-      </section>
-    </div>
 
+        <div id="pageGateway" class="main-page" data-page="gateway" hidden>
+          <div class="next-page-intro"><div><h1 data-i18n="gatewayTitle">网关</h1><p data-i18n="gatewayDesc">OpenAI 兼容地址、模型目录与下游鉴权状态。</p></div><button type="button" class="primary" data-action="open-key-modal" data-i18n="createKey">签发 API Key</button></div>
+          <div class="endpoint-grid"><section class="endpoint-card"><span data-i18n="baseUrl">Base URL</span><strong id="gatewayBaseUrl" class="mono"></strong><button type="button" class="copy-btn" data-copy-target="gatewayBaseUrl" data-i18n="copy">复制</button></section><section class="endpoint-card"><span data-i18n="chatEndpoint">对话端点</span><strong id="gatewayChatUrl" class="mono"></strong><button type="button" class="copy-btn" data-copy-target="gatewayChatUrl" data-i18n="copy">复制</button></section><section class="endpoint-card"><span data-i18n="imageEndpoint">生图端点</span><strong id="gatewayImageUrl" class="mono"></strong><button type="button" class="copy-btn" data-copy-target="gatewayImageUrl" data-i18n="copy">复制</button></section></div>
+          <section><div class="section-head"><div><h2 data-i18n="modelCatalog">模型目录</h2><p id="gatewayModelHint" data-i18n="modelCatalogDesc">目录会依面板会话与 Key 权限显示。</p></div><button type="button" class="sec" data-action="refresh-models" data-i18n="refresh">刷新</button></div><div class="table-wrap"><table id="gatewayModelTable"><thead><tr><th data-i18n="publicModel">对外模型 ID</th><th data-i18n="upstreamModel">上游 model</th><th data-i18n="description">说明</th></tr></thead><tbody id="gatewayModelsBody"></tbody></table></div></section>
+          <section><div class="section-head"><div><h2 data-i18n="keyAccess">API Key 鉴权</h2><p id="gatewayKeySummary">—</p></div><button type="button" class="sec" data-action="open-key-settings" data-i18n="manageKeys">管理 Key</button></div><div id="gatewayAccessCallout" class="callout"></div></section>
+        </div>
+
+        <div id="pageAccounts" class="main-page" data-page="accounts" hidden>
+          <div class="next-page-intro"><div><h1 data-i18n="accountsTitle">账号</h1><p data-i18n="accountsDesc">管理 DeepAI Cookie、账号密码与 API Key 凭据。</p></div><div class="intro-actions"><button type="button" class="sec" data-action="open-import" data-i18n="importJson">导入 JSON</button><button type="button" class="sec" data-action="export-accounts" data-i18n="exportJson">导出 JSON</button><button type="button" class="primary" data-action="open-account-modal" data-i18n="addAccount">添加账号</button></div></div>
+          <section class="toolbar-card"><div class="filter-grid"><input id="accountSearch" type="search" data-i18n-placeholder="searchAccounts" placeholder="搜索名称、邮箱、分组或错误"><select id="accountTypeFilter"><option value="all" data-i18n="allTypes">全部类型</option><option value="cookie">Cookie</option><option value="login" data-i18n="passwordLogin">账号密码</option><option value="apikey">API Key</option></select><select id="accountGroupFilter"><option value="all" data-i18n="allGroups">全部分组</option></select><select id="accountStatusFilter"><option value="all" data-i18n="allStatus">全部状态</option><option value="active" data-i18n="active">启用</option><option value="cooling" data-i18n="cooling">冷却</option><option value="disabled" data-i18n="disabled">停用</option></select><select id="accountSort"><option value="name-asc" data-i18n="sortName">名称 A–Z</option><option value="weight-desc" data-i18n="sortWeight">权重高优先</option><option value="uses-desc" data-i18n="sortUses">使用多优先</option><option value="created-desc" data-i18n="sortNewest">最新加入</option></select></div><div class="batch-bar"><span id="accountSelectionSummary" data-i18n="noneSelected">未选择账号</span><div class="batch-actions"><button type="button" class="sec mini" data-batch-action="test" data-i18n="test">测试</button><button type="button" class="sec mini" data-batch-action="refresh" data-i18n="refreshLogin">重登</button><button type="button" class="sec mini" data-batch-action="enable" data-i18n="enable">启用</button><button type="button" class="sec mini" data-batch-action="disable" data-i18n="disable">停用</button><button type="button" class="sec mini" data-batch-action="reset" data-i18n="reset">重置</button><button type="button" class="sec mini danger" data-batch-action="delete" data-i18n="delete">删除</button></div></div></section>
+          <section class="table-section"><div class="table-wrap"><table class="account-table"><thead><tr><th class="select-col"><input id="accountSelectPage" type="checkbox" aria-label="选择本页"></th><th data-i18n="account">账号</th><th data-i18n="type">类型</th><th data-i18n="group">分组</th><th class="num" data-i18n="weight">权重</th><th data-i18n="status">状态</th><th data-i18n="plan">方案 / 点数</th><th class="num" data-i18n="uses">使用</th><th data-i18n="lastError">最近错误</th><th class="actions-col" data-i18n="actions">操作</th></tr></thead><tbody id="accountsBody"></tbody></table></div><div class="pagination"><span id="accountPageSummary"></span><div><button type="button" class="sec mini" data-action="account-prev" data-i18n="previous">上一页</button><button type="button" class="sec mini" data-action="account-next" data-i18n="next">下一页</button></div></div></section>
+        </div>
+
+        <div id="pageAnalytics" class="main-page" data-page="analytics" hidden>
+          <div class="next-page-intro"><div><h1 data-i18n="analyticsTitle">用量分析</h1><p data-i18n="analyticsDesc">依服务器时区统计今天、近 7 天与近 30 天。</p></div><div class="segmented" id="analyticsRanges"><button type="button" data-range="today" data-i18n="today">今天</button><button type="button" class="active" data-range="7d" data-i18n="sevenDays">7 天</button><button type="button" data-range="30d" data-i18n="thirtyDays">30 天</button></div></div><div id="analyticsKpis" class="kpi-grid"></div><section><div class="section-head"><div><h2 data-i18n="requestTrend">请求趋势</h2><p data-i18n="requestTrendDesc">按日请求与错误。</p></div></div><div id="analyticsChart" class="bar-chart"></div></section><div class="content-grid two-columns"><section><div class="section-head"><div><h2 data-i18n="byModel">按模型</h2></div></div><div class="table-wrap"><table><thead><tr><th data-i18n="model">模型</th><th class="num" data-i18n="requests">请求</th><th class="num" data-i18n="errors">错误</th><th class="num" data-i18n="latency">耗时</th></tr></thead><tbody id="analyticsModelsBody"></tbody></table></div></section><section><div class="section-head"><div><h2 data-i18n="byKey">按 API Key</h2></div></div><div class="table-wrap"><table><thead><tr><th data-i18n="apiKey">API Key</th><th class="num" data-i18n="requests">请求</th><th class="num" data-i18n="errors">错误</th><th class="num" data-i18n="errorRate">错误率</th></tr></thead><tbody id="analyticsKeysBody"></tbody></table></div></section></div>
+        </div>
+
+        <div id="pageLogs" class="main-page" data-page="logs" hidden>
+          <div class="next-page-intro"><div><h1 data-i18n="logsTitle">请求日志</h1><p data-i18n="logsDesc">筛选网关调用、上游账号与错误信息。</p></div><div class="intro-actions"><button type="button" id="logPollBtn" class="sec" data-action="toggle-log-poll" data-i18n="pauseRefresh">暂停刷新</button><button type="button" class="sec danger" data-action="clear-logs" data-i18n="clearLogs">清空日志</button></div></div><section class="toolbar-card"><div class="filter-grid logs-filter"><input id="logSearch" type="search" data-i18n-placeholder="searchLogs" placeholder="搜索模型、Key、上游或错误"><select id="logOutcome"><option value="" data-i18n="allResults">全部结果</option><option value="ok" data-i18n="success">成功</option><option value="error" data-i18n="failed">失败</option></select><span id="logCount" class="toolbar-count"></span></div></section><section class="table-section"><div class="table-wrap"><table><thead><tr><th data-i18n="time">时间</th><th data-i18n="endpoint">端点</th><th data-i18n="model">模型</th><th data-i18n="apiKey">API Key</th><th data-i18n="upstream">上游</th><th data-i18n="status">状态</th><th class="num" data-i18n="latency">耗时</th><th data-i18n="detail">详情</th></tr></thead><tbody id="logsBody"></tbody></table></div></section>
+        </div>
+
+        <div id="pageSettings" class="main-page" data-page="settings" hidden>
+          <div class="next-page-intro"><div><h1 data-i18n="settingsTitle">设置</h1><p data-i18n="settingsDesc">面板、API Key、模型、稳定性与界面选项。</p></div></div>
+          <div id="nextSettingsGroups" class="next-settings-groups" role="tablist"><button type="button" class="next-settings-group active" data-settings-group="basic" data-i18n="settingsBasic">基本</button><button type="button" class="next-settings-group" data-settings-group="api" data-i18n="settingsApi">API 与鉴权</button><button type="button" class="next-settings-group" data-settings-group="model" data-i18n="settingsModel">模型</button><button type="button" class="next-settings-group" data-settings-group="stability" data-i18n="settingsStability">稳定性</button><button type="button" class="next-settings-group" data-settings-group="system" data-i18n="settingsSystem">系统与界面</button></div>
+          <div class="settings-stack">
+            <section data-settings-section="basic"><div class="next-settings-head"><h2 data-i18n="settingsBasic">基本</h2><p data-i18n="basicDesc">面板密码、主题与界面语言。</p></div><div class="settings-form"><label><span data-i18n="currentPassword">当前密码</span><input id="settingCurrentPassword" type="password" autocomplete="current-password"></label><label><span data-i18n="newPassword">新密码</span><input id="settingNewPassword" type="password" autocomplete="new-password"></label><div class="field-action"><button type="button" class="sec" data-action="change-password" data-i18n="changePassword">修改密码</button><span id="passwordHint" class="hint"></span></div><label><span data-i18n="theme">主题</span><select id="settingTheme"><option value="system" data-i18n="themeSystem">跟随系统</option><option value="light" data-i18n="themeLight">亮色</option><option value="dark" data-i18n="themeDark">暗色</option></select></label><label><span data-i18n="language">界面语言</span><select id="settingLanguage"><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="en">English</option></select></label></div><div class="section-actions"><button type="button" class="primary" data-action="save-settings" data-i18n="saveSettings">保存设置</button></div></section>
+            <section data-settings-section="api" hidden><div class="next-settings-head"><h2 data-i18n="settingsApi">API 与鉴权</h2><p data-i18n="apiDesc">下游 API Key、开放模式与匿名回退。</p></div><div class="settings-form compact"><label class="switch-row"><span><b data-i18n="openMode">无 Key 时开放模式</b><small data-i18n="openModeDesc">仅当尚未签发任何 Key 时允许匿名下游调用。</small></span><input id="settingOpenMode" type="checkbox"></label><label class="switch-row"><span><b data-i18n="anonymousFallback">匿名上游回退</b><small data-i18n="anonymousFallbackDesc">账号池不可用时尝试 DeepAI 访客流程。</small></span><input id="settingAnonymousFallback" type="checkbox"></label></div><div class="subsection-head"><div><h3 data-i18n="gatewayKeys">下游 API Key</h3><p data-i18n="gatewayKeysDesc">可限制模型、账号与请求次数。</p></div><button type="button" class="primary" data-action="open-key-modal" data-i18n="addKey">添加 Key</button></div><div id="settingsKeyCards" class="key-grid"></div><div class="section-actions"><button type="button" class="primary" data-action="save-settings" data-i18n="saveSettings">保存设置</button></div></section>
+            <section data-settings-section="model" hidden><div class="next-settings-head"><h2 data-i18n="settingsModel">模型</h2><p data-i18n="modelSettingsDesc">默认模型、模型映射与未知模型直通。</p></div><div class="settings-form"><label><span data-i18n="defaultModel">默认模型</span><input id="settingDefaultModel" autocomplete="off"></label><label class="switch-row"><span><b data-i18n="passthroughModels">未知模型直通</b><small data-i18n="passthroughDesc">允许未列入映射的模型名称直接传给上游。</small></span><input id="settingPassthrough" type="checkbox"></label><label class="full"><span data-i18n="modelMap">模型映射 JSON</span><textarea id="settingModelMap" rows="9" class="mono" spellcheck="false"></textarea></label></div><div class="section-actions"><button type="button" class="primary" data-action="save-settings" data-i18n="saveSettings">保存设置</button></div></section>
+            <section data-settings-section="stability" hidden><div class="next-settings-head"><h2 data-i18n="settingsStability">稳定性</h2><p data-i18n="stabilityDesc">请求超时、日志容量与控制台刷新频率。</p></div><div class="settings-form"><label><span data-i18n="requestTimeout">上游超时（毫秒）</span><input id="settingTimeout" type="number" min="5000" max="600000" step="1000"></label><label><span data-i18n="logLimit">日志上限</span><input id="settingLogLimit" type="number" min="50" max="5000" step="50"></label><label><span data-i18n="pollInterval">面板刷新间隔（毫秒）</span><input id="settingPollInterval" type="number" min="2000" max="60000" step="1000"></label></div><div class="section-actions"><button type="button" class="primary" data-action="save-settings" data-i18n="saveSettings">保存设置</button></div></section>
+            <section data-settings-section="system" hidden><div class="next-settings-head"><h2 data-i18n="settingsSystem">系统与界面</h2><p data-i18n="systemDesc">页面可见性、窗口限高与部署信息。</p></div><div class="settings-form"><fieldset class="full"><legend data-i18n="visiblePages">可见页面</legend><div id="visiblePagesGrid" class="checkbox-grid"><label><input type="checkbox" value="overview"><span data-i18n="navOverview">总览</span></label><label><input type="checkbox" value="gateway"><span data-i18n="navGateway">网关</span></label><label><input type="checkbox" value="accounts"><span data-i18n="navAccounts">账号</span></label><label><input type="checkbox" value="analytics"><span data-i18n="navAnalytics">分析</span></label><label><input type="checkbox" value="logs"><span data-i18n="navLogs">日志</span></label><label><input type="checkbox" value="settings" checked disabled><span data-i18n="navSettings">设置</span></label></div></fieldset><label><span data-i18n="windowMaxHeight">区块最大高度（0 = 不限制）</span><input id="settingWindowMaxHeight" type="number" min="0" max="4000" step="40"></label></div><div id="environmentFacts" class="environment-facts"></div><div class="section-actions"><button type="button" class="primary" data-action="save-settings" data-i18n="saveSettings">保存设置</button></div></section>
+          </div>
+        </div>
+      </main></div>
+    </div>
   </div>
-</div>
-</div>
 
-<div id="toastBox" style="position:fixed;bottom:22px;right:22px;z-index:900;display:flex;flex-direction:column;gap:8px"></div>
+  <nav id="nextBottomNav" aria-label="移动导航"><button type="button" class="next-bottom-item active" data-nav-page="overview"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span data-i18n="navOverview">总览</span></button><button type="button" class="next-bottom-item" data-nav-page="gateway"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg><span data-i18n="navGateway">网关</span></button><button type="button" class="next-bottom-item" data-nav-page="accounts"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c.4-3.2 2.4-5 5.5-5s5.1 1.8 5.5 5"/></svg><span data-i18n="navAccounts">账号</span></button><button type="button" class="next-bottom-item" data-nav-page="analytics"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M7 15l3.5-4 3 2.5L20 7"/></svg><span data-i18n="navAnalytics">分析</span></button><button type="button" class="next-bottom-item" data-action="open-more"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg><span data-i18n="more">更多</span></button></nav>
+  <div id="nextMoreSheet" aria-hidden="true"><div class="next-more-backdrop" data-action="close-more"></div><div class="next-more-panel" role="dialog" aria-modal="true" aria-label="更多功能"><div class="next-more-handle"></div><div class="next-more-title" data-i18n="more">更多</div><div class="next-more-grid"><button type="button" class="next-more-item" data-nav-page="logs" data-i18n="navLogs">日志</button><button type="button" class="next-more-item" data-nav-page="settings" data-i18n="navSettings">设置</button></div><div class="next-more-sep"></div><button type="button" class="next-more-system" data-action="cycle-theme" data-i18n="cycleTheme">切换主题</button><button type="button" class="next-more-system next-more-danger" data-action="logout" data-i18n="logout">退出登录</button></div></div>
 
-<script src="/app.js"></script>
+  <div id="accountModal" class="modal-mask" hidden><div class="modal" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle"><div class="modal-hd"><div><h2 id="accountModalTitle" data-i18n="addAccount">添加账号</h2><p data-i18n="accountModalDesc">选择 DeepAI 凭据类型并填写安全信息。</p></div><button type="button" class="modal-x" data-close-modal="accountModal" aria-label="关闭">×</button></div><form id="accountForm" class="modal-bd form-stack"><div class="segmented full" id="accountTypeTabs"><button type="button" class="active" data-account-type="cookie">Cookie</button><button type="button" data-account-type="login" data-i18n="passwordLogin">账号密码</button><button type="button" data-account-type="apikey">API Key</button></div><input id="accountType" type="hidden" value="cookie"><div class="form-grid"><label><span data-i18n="nameOptional">名称（可选）</span><input id="accountName" autocomplete="off"></label><label><span data-i18n="groupOptional">分组（可选）</span><input id="accountGroup" autocomplete="off"></label><label><span data-i18n="weight">权重</span><input id="accountWeight" type="number" min="1" max="100" value="1"></label></div><div id="accountCookieFields" data-account-fields="cookie"><label><span>Cookie</span><textarea id="accountCookie" rows="6" class="mono" spellcheck="false" placeholder="sessionid=…; csrftoken=…"></textarea></label><p class="hint" data-i18n="cookieHint">可一次贴入多行 Cookie，每行建立一个账号。</p></div><div id="accountLoginFields" data-account-fields="login" hidden><label><span data-i18n="email">邮箱</span><input id="accountEmail" type="email" autocomplete="username"></label><label><span data-i18n="password">密码</span><input id="accountPassword" type="password" autocomplete="current-password"></label></div><div id="accountApiKeyFields" data-account-fields="apikey" hidden><label><span>DeepAI API Key</span><input id="accountApiKey" type="password" autocomplete="off" spellcheck="false"></label></div><div id="accountFormMessage" class="form-message" role="alert"></div></form><div class="modal-ft"><button type="button" class="sec" data-close-modal="accountModal" data-i18n="cancel">取消</button><button type="submit" form="accountForm" class="primary" id="accountSubmitBtn" data-i18n="addAccount">添加账号</button></div></div></div>
+  <div id="accountEditModal" class="modal-mask" hidden><div class="modal small" role="dialog" aria-modal="true" aria-labelledby="accountEditTitle"><div class="modal-hd"><div><h2 id="accountEditTitle" data-i18n="editAccount">编辑账号</h2><p id="accountEditIdentity" class="mono"></p></div><button type="button" class="modal-x" data-close-modal="accountEditModal" aria-label="关闭">×</button></div><form id="accountEditForm" class="modal-bd form-stack"><input id="accountEditId" type="hidden"><label><span data-i18n="name">名称</span><input id="accountEditName"></label><label><span data-i18n="group">分组</span><input id="accountEditGroup"></label><label><span data-i18n="weight">权重</span><input id="accountEditWeight" type="number" min="1" max="100"></label><div id="accountEditMessage" class="form-message" role="alert"></div></form><div class="modal-ft"><button type="button" class="sec" data-close-modal="accountEditModal" data-i18n="cancel">取消</button><button type="submit" form="accountEditForm" class="primary" data-i18n="save">保存</button></div></div></div>
+  <div id="importModal" class="modal-mask" hidden><div class="modal" role="dialog" aria-modal="true" aria-labelledby="importModalTitle"><div class="modal-hd"><div><h2 id="importModalTitle" data-i18n="importAccounts">导入账号 JSON</h2><p data-i18n="importDesc">选择导出文件或贴入 version 1 JSON。</p></div><button type="button" class="modal-x" data-close-modal="importModal" aria-label="关闭">×</button></div><form id="importForm" class="modal-bd form-stack"><div class="callout warning" data-i18n="credentialWarning">文件可能包含 Cookie、密码与 API Key，请只在可信设备处理。</div><label><span data-i18n="selectFile">选择文件</span><input id="importFile" type="file" accept="application/json,.json"></label><label><span>JSON</span><textarea id="importJson" rows="12" class="mono" spellcheck="false"></textarea></label><div id="importMessage" class="form-message" role="alert"></div></form><div class="modal-ft"><button type="button" class="sec" data-close-modal="importModal" data-i18n="cancel">取消</button><button type="submit" form="importForm" class="primary" data-i18n="import">导入</button></div></div></div>
+  <div id="gatewayKeyModal" class="modal-mask" hidden><div class="modal" role="dialog" aria-modal="true" aria-labelledby="gatewayKeyModalTitle"><div class="modal-hd"><div><h2 id="gatewayKeyModalTitle" data-i18n="createKey">签发 API Key</h2><p data-i18n="keyModalDesc">空白模型或账号代表不限制。</p></div><button type="button" class="modal-x" data-close-modal="gatewayKeyModal" aria-label="关闭">×</button></div><form id="gatewayKeyForm" class="modal-bd form-stack"><input id="gatewayKeyId" type="hidden"><label><span data-i18n="name">名称</span><input id="gatewayKeyName" maxlength="80"></label><label><span data-i18n="allowedModels">允许模型 / 通配符</span><input id="gatewayKeyModels" class="mono" placeholder="deepai-*, gpt-4o-mini"><small data-i18n="modelsCsvHint">逗号分隔，支持 *。</small></label><label><span data-i18n="requestLimit">请求上限（0 = 无限）</span><input id="gatewayKeyLimit" type="number" min="0" step="1" value="0"></label><fieldset><legend data-i18n="allowedAccounts">允许账号</legend><div class="picker-tools"><input id="gatewayKeyAccountSearch" type="search" data-i18n-placeholder="searchAccounts" placeholder="搜索账号"><button type="button" class="sec mini" data-action="select-all-key-accounts" data-i18n="selectAll">全选</button><button type="button" class="sec mini" data-action="clear-key-accounts" data-i18n="clear">清除</button></div><div id="gatewayKeyAccounts" class="checkbox-list"></div><small data-i18n="accountRestrictionHint">不选择代表全部账号；选择账号后不会匿名回退。</small></fieldset><div id="gatewayKeyMessage" class="form-message" role="alert"></div></form><div class="modal-ft"><button type="button" class="sec" data-close-modal="gatewayKeyModal" data-i18n="cancel">取消</button><button type="submit" form="gatewayKeyForm" class="primary" data-i18n="save">保存</button></div></div></div>
+  <div id="createdKeyModal" class="modal-mask" hidden><div class="modal small" role="dialog" aria-modal="true" aria-labelledby="createdKeyTitle"><div class="modal-hd"><div><h2 id="createdKeyTitle" data-i18n="keyCreatedTitle">API Key 已签发</h2><p data-i18n="keyCreatedDesc">请立即复制并妥善保存这把 Key。</p></div><button type="button" class="modal-x" data-close-modal="createdKeyModal" aria-label="关闭">×</button></div><div class="modal-bd form-stack"><label><span>API Key</span><input id="createdKeyValue" class="mono" readonly></label><div class="callout warning" data-i18n="keyCreatedWarning">关闭后仍可在设置页复制，但请勿在不可信设备暴露密钥。</div></div><div class="modal-ft"><button type="button" class="sec" data-close-modal="createdKeyModal" data-i18n="close">关闭</button><button type="button" class="primary" data-copy-target="createdKeyValue" data-i18n="copy">复制</button></div></div></div>
+  <div id="toastBox" class="toast-box" aria-live="polite"></div>
+  <script src="/console-core.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>
