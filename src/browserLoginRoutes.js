@@ -1,9 +1,30 @@
 'use strict';
 
+const { BlockList, isIP } = require('node:net');
 const ADMIN_PREFIX = '/api/admin/accounts/login/';
 const VIEWER_PREFIX = '/api/account-login/';
+const PRIVATE_NETWORKS = new BlockList();
+for (const [address, prefix] of [['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['172.16.0.0', 12], ['192.168.0.0', 16]]) {
+  PRIVATE_NETWORKS.addSubnet(address, prefix, 'ipv4');
+}
+PRIVATE_NETWORKS.addAddress('::1', 'ipv6');
+PRIVATE_NETWORKS.addSubnet('fc00::', 7, 'ipv6');
 
-function createBrowserLoginRoutes(manager, auth) {
+function isPrivateIp(value) {
+  const address = String(value || '').replace(/^\[|\]$/g, '');
+  const version = isIP(address);
+  return version > 0 && PRIVATE_NETWORKS.check(address, `ipv${version}`);
+}
+
+function httpOrigin(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash ? url.origin : '';
+  } catch { return ''; }
+}
+
+function createBrowserLoginRoutes(manager, auth, { allowPrivateHttp = true, privateHttpOrigin = '' } = {}) {
+  const configuredHttpOrigin = httpOrigin(privateHttpOrigin);
   function json(res, status, body) {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' });
     res.end(JSON.stringify(body));
@@ -15,11 +36,26 @@ function createBrowserLoginRoutes(manager, auth) {
       try {
         // These routes have no CORS surface. In particular, viewer tokens never
         // travel in URLs, and cannot authorize any administrative action.
-        if (req.headers.origin) {
-          let origin;
-          try { origin = new URL(req.headers.origin); } catch { throw error(403, 'Cross-origin login request rejected'); }
-          if (!['http:', 'https:'].includes(origin.protocol) || origin.host !== req.headers.host) throw error(403, 'Cross-origin login request rejected');
-          if (origin.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname)) throw error(403, 'Browser login requires HTTPS or localhost');
+        let privateHttp = false;
+        if (req.headers.origin || req.method === 'POST') {
+          let origin, authority;
+          const peerPrivate = isPrivateIp(req.socket.remoteAddress);
+          const secure = req.socket.encrypted;
+          try {
+            origin = new URL(req.headers.origin || `${secure ? 'https' : 'http'}://${req.headers.host}`);
+            authority = new URL(`${origin.protocol}//${req.headers.host}`);
+          } catch { throw error(403, 'Cross-origin login request rejected'); }
+          if (!['http:', 'https:'].includes(origin.protocol) || origin.origin !== authority.origin || origin.username || origin.password) {
+            throw error(403, 'Cross-origin login request rejected');
+          }
+          if (origin.protocol === 'http:') {
+            const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname);
+            const privateHost = isPrivateIp(origin.hostname) || /\.(?:local|internal|home\.arpa|ts\.net)$/.test(origin.hostname) || origin.origin === configuredHttpOrigin;
+            if (!peerPrivate || (!loopback && !(allowPrivateHttp && privateHost))) {
+              throw error(403, 'Open the panel over HTTPS, localhost, or a trusted LAN/VPN address to generate a login link.');
+            }
+            privateHttp = !loopback;
+          }
         }
         const bearer = String(req.headers.authorization || '').match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
         const token = admin
@@ -40,7 +76,8 @@ function createBrowserLoginRoutes(manager, auth) {
             if (!Number.isInteger(body.weight) || body.weight < 1 || body.weight > 100) throw error(400, 'weight must be an integer from 1 to 100');
             metadata.weight = body.weight;
           }
-          json(res, 200, await manager.start(token, metadata));
+          const login = await manager.start(token, metadata);
+          json(res, 200, privateHttp ? { ...login, authUrl: `${login.authUrl}&privateHttp=1` } : login);
         } else if (action === 'status' && req.method === 'GET') {
           json(res, 200, await manager.getStatus(stateOf(url.searchParams.get('state')), token, kind));
         } else if (action === 'cancel' && req.method === 'POST') {

@@ -26,7 +26,7 @@ function createServer(options = {}) {
   const openai = createOpenAIRoutes(store, pool);
   const admin = createAdminRoutes(store, pool, auth);
   const browserLogin = options.browserLogin || new BrowserLogin({ pool, auth, config: CONFIG.browserLogin, upstream: CONFIG.upstream });
-  const loginRoutes = createBrowserLoginRoutes(browserLogin, auth);
+  const loginRoutes = createBrowserLoginRoutes(browserLogin, auth, CONFIG.browserLogin);
 
   const server = http.createServer(async (req, res) => {
     try {

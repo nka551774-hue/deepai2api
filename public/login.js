@@ -17,6 +17,7 @@
   const params = new URLSearchParams(location.hash.replace(/^#/, ''));
   const state = params.get('state') || '';
   const token = params.get('token') || '';
+  const privateHttp = location.protocol === 'http:' && params.get('privateHttp') === '1';
   history.replaceState(null, '', location.pathname + location.search);
 
   let language = navigator.language?.toLowerCase().startsWith('zh-tw') || navigator.language?.toLowerCase().startsWith('zh-hk') ? 'zh-TW' : navigator.language?.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en';
@@ -40,12 +41,18 @@
     for (const [name, replacement] of Object.entries(vars)) value = value.replaceAll(`{${name}}`, replacement);
     return value;
   }
+  const HTTP_NOTICE = {
+    'zh-CN': '当前使用内网 HTTP，你与面板之间的登录输入未经 HTTPS 加密。请确认你信任这条连接。',
+    'zh-TW': '目前使用區網 HTTP，你與面板之間的登入輸入未經 HTTPS 加密。請確認你信任這條連線。',
+    en: 'This LAN connection uses HTTP. Your sign-in input to the panel is not encrypted by HTTPS. Continue only on a connection you trust.',
+  };
   function applyLanguage() {
     document.documentElement.lang = language;
     document.title = `DeepAI · ${t('isolatedBrowser')}`;
     document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
     document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => { el.placeholder = t(el.dataset.i18nPlaceholder); });
     document.querySelectorAll('[data-i18n-aria]').forEach((el) => { const value = t(el.dataset.i18nAria); el.setAttribute('aria-label', value); el.title = value; });
+    if (privateHttp) $('#httpNotice').textContent = HTTP_NOTICE[language];
     $('#languageSelect').value = language;
     const type = $('#mobileInputType').value; $('#mobileTextInput').type = type;
   }
@@ -85,7 +92,7 @@
     if (terminal) return;
     try {
       const data = await request(`/api/account-login/status?state=${encodeURIComponent(state)}`);
-      expiresAt = Number(data.expiresAt) || expiresAt; const status = data.status || 'waiting'; sessionStatus = status; $('#statusBadge').className = `status-badge ${status}`; $('#statusBadge').textContent = statusLabel(status); $('#connectionStatus').textContent = t('secureSession'); updatePageIdentity(data); updateCountdown();
+      expiresAt = Number(data.expiresAt) || expiresAt; const status = data.status || 'waiting'; sessionStatus = status; $('#statusBadge').className = `status-badge ${status}`; $('#statusBadge').textContent = statusLabel(status); $('#connectionStatus').textContent = privateHttp ? 'HTTP' : t('secureSession'); updatePageIdentity(data); updateCountdown();
       if (status === 'completed') showTerminal(status, t('completed'), t('sessionComplete'));
       else if (status === 'failed') showTerminal(status, t('failed'), data.error || t('requestFailed'));
       else if (status === 'cancelled') showTerminal(status, t('cancelled'), t('sessionCancelled'));
@@ -140,7 +147,8 @@
     setInputEnabled(false);
     if (!state || !token) return invalidLink();
     const localHosts = new Set(['localhost','127.0.0.1','[::1]','::1']);
-    if (!window.isSecureContext && !localHosts.has(location.hostname)) return invalidLink(t('insecureOrigin'));
+    if (!window.isSecureContext && !localHosts.has(location.hostname) && !privateHttp) return invalidLink(t('insecureOrigin'));
+    $('#httpNotice').hidden = !privateHttp;
     pollStatus(); statusTimer = setInterval(pollStatus, 2000); frameTimer = setInterval(refreshFrame, 1000); countdownTimer = setInterval(updateCountdown, 1000);
   }
 

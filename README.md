@@ -95,12 +95,14 @@ node scripts/docker-smoke.js deepai2api:verify
 deepai.org 的 chat **沒有持有式的 API key**:瀏覽器永遠只帶每次新生成的單次 `tryit` key(`api-key` header)+ 登入 session cookie(`credentials: include`)。帳號身份 = cookie。所以池以「帳號」為單位:
 
 1. **匿名模式(零設定)**:池留空 + `ALLOW_ANONYMOUS_FALLBACK=true`,閘道每個請求自動鑄造匿名單次 `tryit` key 模擬訪客。免登入但可能被上游風控。
-2. **瀏覽器登入（建議）**：面板「帳號 → 登入新增 → 產生登入連結」→ 開啟連結 → 在伺服器建立的隔離 DeepAI 瀏覽器中輸入登入資料。登入完成後，閘道會自動驗證 DeepAI 身份並加入帳號池，不需開 DevTools 或複製 Cookie。隔離工作階段結束時會關閉瀏覽器，輸入的密碼不會寫入 `state.json`。
+2. **瀏覽器登入（建議）**：面板「帳號 → 登入新增 → 產生登入連結」，點開連結，或複製後在能連到面板的裝置開啟。在隔離視窗完成 DeepAI 登入後，面板會自動驗證、加入帳號池並更新清單。同一帳號再次登入會更新原有項目。隔離工作階段結束時會關閉瀏覽器，輸入的密碼不會寫入 `state.json`。
 3. **Cookie 匯入**：登入 deepai.org → F12 → Network → 選取 `api.deepai.org` 的請求 → Request Headers → 複製 `cookie:` → 面板「帳號 → 新增帳號 → Cookie」貼上，每行一個帳號。
 4. **Email 帳密**：面板「帳號 → 新增帳號 → 帳號密碼」輸入 DeepAI Email 和密碼。閘道儲存工作階段，Cookie 失效時會嘗試重登。
 5. **API Key（舊模式）**：在新增帳號時選 API Key，填入 DeepAI 的持久金鑰。也可透過 `UPSTREAM_KEYS` 或 `ACCOUNT_COOKIES` 環境變數預載。
 
-> 遠端部署瀏覽器登入時，面板與登入頁必須透過 HTTPS 提供，反向代理也須保留原始 `Host`。登入連結內含短效瀏覽器控制權杖，只能在可信裝置開啟或分享。Google、Apple 等第三方登入可能因服務商的自動化瀏覽器政策而拒絕登入；能否使用須以實際部署環境測試為準。
+登入連結沿用面板的位址。公開部署請使用 HTTPS；可信的區網或私有 VPN 可用 HTTP（例如 `http://192.168.1.10:3737`、Tailscale 的 `.ts.net` 位址），登入頁會提醒輸入未經 HTTPS 加密。若使用其他自訂內網 DNS 名稱，可在 `.env` 設定 `BROWSER_LOGIN_PRIVATE_HTTP_ORIGIN=http://ai.lan:3737`，填入面板的實際位址和埠。反向代理須保留原始 `Host`，且私有 HTTP 的連線來源必須是私有或 loopback 位址。
+
+登入連結內含短效瀏覽器控制權杖，請只交給本次要登入的人。Google、Apple 等第三方登入仍取決於上游是否允許隔離瀏覽器登入。
 
 > 本專案僅供協定學習與個人研究,請遵守上游服務條款;請勿使用主帳號、勿商業轉售。上游隨時可能收緊風控,使用造成的任何後果自負。
 
@@ -175,6 +177,8 @@ for chunk in r:
 | `UPSTREAM_KEYS` | — | 開機時匯入的舊模式 key(逗號分隔) |
 | `ACCOUNT_COOKIES` | — | 開機預載的瀏覽器 Cookie 帳號(換行分隔多個) |
 | `BROWSER_LOGIN_ENABLED` | `true` | 是否允許從面板建立隔離瀏覽器登入工作階段 |
+| `BROWSER_LOGIN_ALLOW_PRIVATE_HTTP` | `true` | 允許從可信的區網或私有 VPN HTTP 位址建立及使用登入連結 |
+| `BROWSER_LOGIN_PRIVATE_HTTP_ORIGIN` | — | 額外信任的一個內網 HTTP 面板來源（包含埠，例如 `http://ai.lan:3737`） |
 | `BROWSER_LOGIN_TTL_SECONDS` | `600` | 每個瀏覽器登入工作階段的有效秒數 |
 | `BROWSER_LOGIN_MAX_SESSIONS` | `2` | 同時進行的瀏覽器登入工作階段上限 |
 | `BROWSER_EXECUTABLE_PATH` | 自動偵測 | 本機 `npm start` 使用的 Chrome、Edge 或 Chromium 路徑；Compose 映像通常不需設定 |

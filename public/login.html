@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
-  <title>DeepAI 安全登录</title>
+  <title>DeepAI 隔离登录</title>
   <link rel="stylesheet" href="/login.css">
 </head>
 <body>
@@ -25,10 +25,11 @@
         <span id="countdown" class="countdown">--:--</span>
       </div>
       <div class="browser-meta">
-        <div><h1 id="pageTitle" data-i18n="connecting">正在连接安全登录视窗</h1><p id="pageUrl">DeepAI</p></div>
+        <div><h1 id="pageTitle" data-i18n="isolatedBrowser">隔离登录视窗</h1><p id="pageUrl">DeepAI</p></div>
         <span id="statusBadge" class="status-badge waiting" data-i18n="waiting">等待中</span>
       </div>
       <div id="notice" class="notice" data-i18n="privacyNotice">在隔离视窗登录 DeepAI，系统自动加入账号池；不保存密码。</div>
+      <div id="httpNotice" class="notice http-notice" role="note" hidden></div>
 
       <div id="viewport" class="browser-viewport" tabindex="0" aria-label="DeepAI browser viewport">
         <img id="browserFrame" alt="DeepAI login page" draggable="false" hidden>
@@ -49,7 +50,7 @@
       <p class="mobile-input-hint" data-i18n="mobileInputHint">手机输入时，先点击画面中的输入框，再在这里输入；内容只发送到隔离浏览器。</p>
     </section>
 
-    <footer class="login-footer"><span id="connectionStatus" data-i18n="secureSession">安全会话已建立</span><button id="cancelBtn" type="button" class="danger" data-i18n="cancelLogin">取消登录</button></footer>
+    <footer class="login-footer"><span id="connectionStatus" aria-live="polite"></span><button id="cancelBtn" type="button" class="danger" data-i18n="cancelLogin">取消登录</button></footer>
   </main>
   <script src="/login.js"></script>
 </body>

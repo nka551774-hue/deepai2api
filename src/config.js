@@ -31,6 +31,8 @@ const CONFIG = {
 
   browserLogin: {
     enabled: envBool('BROWSER_LOGIN_ENABLED', true),
+    allowPrivateHttp: envBool('BROWSER_LOGIN_ALLOW_PRIVATE_HTTP', true),
+    privateHttpOrigin: envStr('BROWSER_LOGIN_PRIVATE_HTTP_ORIGIN', ''),
     executablePath: envStr('BROWSER_EXECUTABLE_PATH', ''),
     ttlMs: envInt('BROWSER_LOGIN_TTL_SECONDS', 600, 60, 1800) * 1000,
     maxSessions: envInt('BROWSER_LOGIN_MAX_SESSIONS', 2, 1, 4),
