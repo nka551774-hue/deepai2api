@@ -55,7 +55,7 @@ docker compose logs --tail=100
 
 `.env` 的 `PUBLISH_PORT` 控制主機對外埠，`BIND_ADDRESS` 控制主機監聽位址；容器內固定使用 3737。`TZ` 預設為 `Asia/Taipei`。Compose 會載入 `.env`，直接 `npm start` 則使用目前程序的環境變數。
 
-- 面板:<http://localhost:3737/>(密碼取自 `ADMIN_PASSWORD`,預設 `deepai2api`)
+- 面板:<http://localhost:3737/>（Compose 啟動前必須在 `.env` 填入 `ADMIN_PASSWORD`）
 - API base:`http://localhost:3737/v1`
 
 Windows 本機啟動（PowerShell，建議 Node.js 24；保留 Node.js 18 相容性測試）：
