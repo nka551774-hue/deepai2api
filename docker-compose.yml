@@ -1,22 +1,31 @@
 services:
   deepai2api:
+    # 本地構建:
+    #   docker compose up -d --build
+    # 或直接用 CI 自動發佈到 GHCR 的預構建映像(見 .github/workflows/docker.yml):
+    #   image: ghcr.io/nka551774-hue/deepai2api:latest
     build: .
     container_name: deepai2api
     restart: unless-stopped
     ports:
       - "3737:3737"
     environment:
-      # 管理面板密碼(請務必改成自己的)
+      TZ: Asia/Taipei
+      # 管理面板密碼(請務必改成自己的;之後也可在面板「设置」裡直接改)
       ADMIN_PASSWORD: "deepai2api"
-      # 池內 key 全數耗盡時,是否自動改用匿名單次 tryit key
+      # 池內帳號全數冷卻/耗盡時,是否自動改用匿名單次 tryit key
       ALLOW_ANONYMOUS_FALLBACK: "true"
       # 未簽發任何 API 金鑰前,API 是否開放(免鑰匙);簽發第一把後即強制驗鑰
       ALLOW_OPEN_WHEN_NO_KEYS: "true"
       # 上游單次請求超時(毫秒)
       UPSTREAM_TIMEOUT_MS: "180000"
+      # 上游瀏覽器方言(拼 deepai.org/zh-hans 的請求;設 en 或留空可停用)
+      UPSTREAM_LANGUAGE: "zh-hans"
       # (舊模式)dashboard 上游 key,逗號分隔;面板同樣可管理
       # UPSTREAM_KEYS: "key1,key2"
       # 開機預載瀏覽器 Cookie 帳號(每行一個帳號的整行 cookie:)
-      # ACCOUNT_COOKIES: "sessionid=xxx; csrftoken=yyy"
+      # ACCOUNT_COOKIES: |-
+      #   sessionid=xxx; csrftoken=yyy
+      #   sessionid=zzz; csrftoken=www
     volumes:
       - ./data:/app/data

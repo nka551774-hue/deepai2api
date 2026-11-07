@@ -32,6 +32,12 @@ cd 2api
 docker compose up -d --build
 ```
 
+或直接用 CI 自動發佈到 GHCR 的預構建映像(每次 push 到 main 都會重新建置 linux/amd64 + linux/arm64):
+
+```bash
+docker run -d --name deepai2api -p 3737:3737   -e ADMIN_PASSWORD=你的面板密碼   -v ./data:/app/data   ghcr.io/nka551774-hue/deepai2api:latest
+```
+
 - 面板:<http://localhost:3737/>(密碼取自 `ADMIN_PASSWORD`,預設 `deepai2api`)
 - API base:`http://localhost:3737/v1`
 

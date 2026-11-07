@@ -1,6 +1,11 @@
 # syntax=docker/dockerfile:1
 FROM node:20-alpine
 
+LABEL org.opencontainers.image.title="deepai2api" \
+      org.opencontainers.image.description="DeepAI.org chat reverse proxy — OpenAI-compatible API, account pool, admin console" \
+      org.opencontainers.image.source="https://github.com/nka551774-hue/deepai2api" \
+      org.opencontainers.image.licenses="MIT"
+
 # curl is required by the upstream /api/* transport cascade (the upstream
 # refuses non-browser TLS stacks; calls fall back to a system curl client).
 RUN apk add --no-cache curl
