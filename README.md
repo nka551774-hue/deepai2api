@@ -18,7 +18,7 @@ deepai.org chat ──反代──> deepai2api ──OpenAI 格式──> 任何
   - **Email 帳密**:面板填帳密,閘道走官網同款登入流程自動登入、保管 session、過期自動重登
   - **API Key(舊模式)**:deepai dashboard 的持久金鑰
 - **匿名 fallback**:池空時自動鑄造單次 `tryit-` 匿名金鑰模擬瀏覽器訪客(每請求以 UA 雜湊重新鑄造,與瀏覽器一致)
-- **Web 管理面板**:登入保護、總覽統計、上游金鑰管理、下游 API 金鑰簽發(可限制模型白名單 / 請求上限)、請求日誌、模型映射設定
+- **Web 管理面板**:登入保護、總覽統計、帳號池管理(Cookie/帳密)、下游 API 金鑰簽發(可限制模型白名單 / 請求上限)、請求日誌、模型映射設定
 - **對話一致性**:同一對話自動黏住同一把上游 key 與 session uuid
 - **持久化**:狀態(JSON)寫入 `data/state.json`,原子寫入、重啟不丟失
 
@@ -106,7 +106,8 @@ for chunk in r:
 | `ALLOW_ANONYMOUS_FALLBACK` | `true` | 池空時自動用匿名 tryit key |
 | `ALLOW_OPEN_WHEN_NO_KEYS` | `true` | 未簽發 API 金鑰前 API 開放 |
 | `UPSTREAM_TIMEOUT_MS` | `180000` | 上游單請求超時 |
-| `UPSTREAM_KEYS` | — | 開機時匯入的上游 key(逗號分隔) |
+| `UPSTREAM_KEYS` | — | 開機時匯入的舊模式 key(逗號分隔) |
+| `ACCOUNT_COOKIES` | — | 開機預載的瀏覽器 Cookie 帳號(換行分隔多個) |
 
 ## 專案結構
 
@@ -118,8 +119,8 @@ for chunk in r:
 │   ├── store.js           # JSON 持久化(原子寫、防抖)
 │   ├── islandHash.js      # tryit 匿名 key 鑄造(上游 UA 雜湊)
 │   ├── streamParser.js    # 上游串流封包解析
-│   ├── deepai.js          # 上游 client(browser dialect)
-│   ├── keyPool.js         # 帳號池輪替 + failover
+│   ├── deepai.js          # 上游 client(browser dialect + 登入)
+│   ├── accountPool.js     # 帳號池輪替 + 自動重登 + failover
 │   ├── auth.js            # 面板 session / API 金鑰
 │   ├── openaiRoutes.js    # /v1/* OpenAI 相容層
 │   └── adminRoutes.js    # /api/admin/* 面板後端

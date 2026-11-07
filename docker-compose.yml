@@ -14,7 +14,9 @@ services:
       ALLOW_OPEN_WHEN_NO_KEYS: "true"
       # 上游單次請求超時(毫秒)
       UPSTREAM_TIMEOUT_MS: "180000"
-      # 也可以直接帶入上游 key(多把用逗號分隔),面板同樣可管理
+      # (舊模式)dashboard 上游 key,逗號分隔;面板同樣可管理
       # UPSTREAM_KEYS: "key1,key2"
+      # 開機預載瀏覽器 Cookie 帳號(每行一個帳號的整行 cookie:)
+      # ACCOUNT_COOKIES: "sessionid=xxx; csrftoken=yyy"
     volumes:
       - ./data:/app/data

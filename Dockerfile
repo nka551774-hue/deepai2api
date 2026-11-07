@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1
 FROM node:20-alpine
 
+# curl is required by the upstream /api/* transport cascade (the upstream
+# refuses non-browser TLS stacks; calls fall back to a system curl client).
+RUN apk add --no-cache curl
+
 WORKDIR /app
 ENV NODE_ENV=production \
     DATA_DIR=/app/data \
