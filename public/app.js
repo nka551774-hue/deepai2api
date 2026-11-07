@@ -3,9 +3,14 @@
 /* deepai2api 控制台
  * UI 模式沿用 workbuddy2api-hub（面板闸门 / X-Panel-Token / nextNav）。
  * 数据层为本网关 /panel/* 与 /api/admin/* 端点。
+ *
+ * 注意：整段包在 IIFE 内 —— index.html 的首帧脚本已用 const 声明了
+ * PANEL_STORE_KEY / PANEL_REMEMBER_KEY_ 全域词法绑定，这里再 const 同名会直接
+ * SyntaxError，整个脚本报废（登录按钮失效）。
  */
-const PANEL_STORE = window.PANEL_STORE || 'wb-proxy-panel-token';
-const PANEL_REMEMBER_KEY = window.PANEL_REMEMBER_KEY || 'wb-proxy-panel-remember';
+(() => {
+const PANEL_STORE_KEY = 'wb-proxy-panel-token';
+const PANEL_REMEMBER_KEY_ = 'wb-proxy-panel-remember';
 let PANEL_TOKEN = '';
 let CURRENT_TAB = 'overview';
 let LOGS = [];
@@ -13,7 +18,7 @@ let LOG_POLL = true;
 let AN_RANGE = '7d';
 
 try {
-  PANEL_TOKEN = sessionStorage.getItem(PANEL_STORE) || localStorage.getItem(PANEL_STORE) || '';
+  PANEL_TOKEN = sessionStorage.getItem(PANEL_STORE_KEY) || localStorage.getItem(PANEL_STORE_KEY) || '';
 } catch (e) { /* private mode */ }
 
 /* ---------------- 基础工具 ---------------- */
@@ -68,14 +73,14 @@ function panelNeedsLogin() {
 function panelSyncRemember() {
   try {
     const checked = $('#panelRemember') && $('#panelRemember').checked;
-    if (checked) localStorage.setItem(PANEL_REMEMBER_KEY, '1');
-    else localStorage.removeItem(PANEL_REMEMBER_KEY);
+    if (checked) localStorage.setItem(PANEL_REMEMBER_KEY_, '1');
+    else localStorage.removeItem(PANEL_REMEMBER_KEY_);
   } catch (e) { /* ignore */ }
 }
 function panelRememberChanged(cb) {
   panelSyncRemember();
   if (!cb.checked) {
-    try { localStorage.removeItem(PANEL_STORE); } catch (e) { /* ignore */ }
+    try { localStorage.removeItem(PANEL_STORE_KEY); } catch (e) { /* ignore */ }
   }
 }
 async function submitPanelLogin() {
@@ -94,8 +99,8 @@ async function submitPanelLogin() {
     }
     PANEL_TOKEN = data.token;
     try {
-      sessionStorage.setItem(PANEL_STORE, PANEL_TOKEN);
-      if ($('#panelRemember').checked) localStorage.setItem(PANEL_STORE, PANEL_TOKEN);
+      sessionStorage.setItem(PANEL_STORE_KEY, PANEL_TOKEN);
+      if ($('#panelRemember').checked) localStorage.setItem(PANEL_STORE_KEY, PANEL_TOKEN);
     } catch (e) { /* ignore */ }
     $('#panelPwdInput').value = '';
     panelHideGate();
@@ -107,7 +112,7 @@ async function submitPanelLogin() {
 async function panelLogout() {
   try { await api('/panel/logout', { method: 'POST' }); } catch (e) { /* ignore */ }
   PANEL_TOKEN = '';
-  try { sessionStorage.removeItem(PANEL_STORE); localStorage.removeItem(PANEL_STORE); } catch (e) { /* ignore */ }
+  try { sessionStorage.removeItem(PANEL_STORE_KEY); localStorage.removeItem(PANEL_STORE_KEY); } catch (e) { /* ignore */ }
   panelNeedsLogin();
 }
 
@@ -460,15 +465,42 @@ async function bootPanel() {
   const hint = $('#panelDefaultHint');
   if (hint && status.panel_password_is_default) hint.style.display = 'block';
   try {
-    const remembered = localStorage.getItem(PANEL_REMEMBER_KEY) === '1';
+    const remembered = localStorage.getItem(PANEL_REMEMBER_KEY_) === '1';
     $('#panelRemember').checked = remembered;
   } catch (e) { /* ignore */ }
   if (status.authenticated) {
     panelHideGate();
     await startDashboard();
   } else {
-    try { sessionStorage.removeItem(PANEL_STORE); } catch (e) { /* ignore */ }
+    try { sessionStorage.removeItem(PANEL_STORE_KEY); } catch (e) { /* ignore */ }
     panelNeedsLogin();
   }
 }
 bootPanel();
+
+/* inline onclick/oninput 处理器需要全域可见 */
+Object.assign(window, {
+  submitPanelLogin,
+  panelRememberChanged,
+  panelLogout,
+  nextGo,
+  copyText: window.copyText,
+  toggleGwCreate,
+  createGatewayKey,
+  toggleGatewayKey,
+  deleteGatewayKey,
+  accMode,
+  addCookieAccounts,
+  addLoginAccount,
+  testAccount,
+  refreshAccount,
+  toggleAccount,
+  deleteAccount,
+  setRange,
+  renderLogs,
+  toggleLogPoll,
+  clearLogs,
+  saveSettings,
+  changePanelPassword,
+});
+})();
