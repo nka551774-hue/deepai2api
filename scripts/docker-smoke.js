@@ -46,11 +46,55 @@ async function request(base, endpoint, body, token) {
   return result;
 }
 
+function verifyBrowserRuntime() {
+  const script = String.raw`
+    'use strict';
+    const assert = require('node:assert/strict');
+    const { chromium } = require('playwright-core');
+
+    (async () => {
+      const browser = await chromium.launch({
+        headless: true,
+        executablePath: process.env.BROWSER_EXECUTABLE_PATH,
+      });
+      try {
+        const context = await browser.newContext({ viewport: { width: 1000, height: 760 } });
+        const page = await context.newPage();
+        await page.setContent('<!doctype html><title>Browser smoke</title><main id="fixture">browser-login-ready</main>');
+        assert.equal(await page.locator('#fixture').textContent(), 'browser-login-ready');
+        const screenshot = await page.screenshot({
+          path: '/tmp/deepai-browser-smoke.jpg',
+          type: 'jpeg',
+          quality: 70,
+        });
+        assert.ok(screenshot.length > 1000, 'Chromium returned an empty screenshot');
+        assert.deepEqual([...screenshot.subarray(0, 3)], [0xff, 0xd8, 0xff]);
+        process.stdout.write(JSON.stringify({
+          title: await page.title(),
+          screenshotBytes: screenshot.length,
+          uid: process.getuid?.(),
+        }));
+      } finally {
+        await browser.close();
+      }
+    })().catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
+  `;
+  const result = JSON.parse(docker(['exec', '--user', 'app', name, 'node', '-e', script]));
+  assert.equal(result.title, 'Browser smoke');
+  assert.ok(result.screenshotBytes > 1000);
+  assert.notEqual(result.uid, 0, 'Chromium must launch as the non-root app user');
+  docker(['exec', '--user', 'app', name, 'test', '-s', '/tmp/deepai-browser-smoke.jpg']);
+}
+
 async function main() {
   try {
     docker(['volume', 'create', volume]);
     docker(['run', '--detach', '--init', '--name', name,
       '--publish', '127.0.0.1::3737',
+      '--shm-size', '256m',
       '--mount', `type=volume,source=${volume},target=/app/data,volume-nocopy`,
       '--health-interval', '1s', '--health-start-period', '1s', '--health-retries', '10',
       '--env', `ADMIN_PASSWORD=${password}`, '--env', 'ALLOW_ANONYMOUS_FALLBACK=false',
@@ -58,12 +102,13 @@ async function main() {
     await healthy();
     let base = address();
     assert.equal((await request(base, '/healthz')).ok, true);
-    for (const file of ['/', '/app.js', '/console-core.js', '/style.css']) {
+    for (const file of ['/', '/app.js', '/console-core.js', '/style.css', '/login.html', '/login.js', '/login.css']) {
       assert.equal((await fetch(base + file)).status, 200, `Missing console asset: ${file}`);
     }
     const uid = docker(['exec', name, 'node', '-e',
       "const fs=require('fs');const pid=fs.readFileSync('/proc/1/task/1/children','utf8').trim().split(' ')[0]||'1';console.log(fs.readFileSync('/proc/'+pid+'/status','utf8').match(/^Uid:\\s+(\\d+)/m)[1])"]);
     assert.notEqual(uid, '0', 'The application must run as a non-root user');
+    verifyBrowserRuntime();
     assert.equal(docker(['exec', name, 'node', '-p', "new Date('2026-11-07T00:00:00Z').getTimezoneOffset()"]), '-480');
     docker(['exec', name, 'test', '-f', '/app/THIRD_PARTY_NOTICES.md']);
 
@@ -95,7 +140,7 @@ async function main() {
     const keys = (await request(base, '/api/admin/gateway-keys', undefined, token)).keys;
     assert.deepEqual(keys[0].accountIds, [account.id]);
     assert.equal(keys[0].requestLimit, 5);
-    console.log('Docker smoke passed: health, assets, non-root process, timezone, account/key/settings persistence, graceful restart.');
+    console.log('Docker smoke passed: health, assets, non-root process and Chromium, timezone, account/key/settings persistence, graceful restart.');
   } finally {
     try { docker(['rm', '--force', name]); } catch { /* may not have started */ }
     try { docker(['volume', 'rm', volume]); } catch { /* may not have been created */ }

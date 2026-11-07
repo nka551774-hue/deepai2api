@@ -56,6 +56,36 @@ class AccountPool {
     return this._addAccount({ type: 'cookie', cookie, name: cleanLabel(name) });
   }
 
+  /** Called only after the isolated browser session has been verified upstream. */
+  captureBrowserAccount(cookie, user, metadata = {}) {
+    cookie = sanitizeCookieHeader(cookie);
+    if (!/(?:^|;\s*)sessionid=[^;\s]+/i.test(cookie)) throw new Error('A DeepAI session cookie is required');
+    if (!user || typeof user !== 'object' || user.is_authenticated === false ||
+        !(user.id || user.pk || user.email || user.username)) throw new Error('An authenticated DeepAI user is required');
+    const email = normalizeEmail(user.email);
+    const id = String(user.id || user.pk || '');
+    const existing = this.list().find((entry) => {
+      if (entry.type === 'apikey') return false;
+      const info = entry.userInfo || {};
+      const priorId = String(info.id || info.pk || '');
+      if (id && priorId) return id === priorId;
+      const priorEmail = normalizeEmail(info.email || entry.email);
+      if (email && priorEmail) return email === priorEmail;
+      return Boolean(user.username && info.username && user.username === info.username) || entry.cookie === cookie;
+    });
+    const fields = {
+      cookie, userInfo: user, source: 'browser', cookieUpdatedAt: new Date().toISOString(),
+      name: cleanLabel(metadata.name) || existing?.name || email || cleanLabel(user.username) || 'DeepAI',
+      group: Object.hasOwn(metadata, 'group') ? cleanLabel(metadata.group) : existing?.group || '',
+      weight: validateWeight(metadata.weight ?? existing?.weight ?? 1),
+    };
+    if (!existing) return this._addAccount({ type: 'cookie', ...fields });
+    Object.assign(existing, fields, { lastErrorMessage: '', cooldownUntil: null });
+    if (existing.status !== 'disabled') existing.status = 'active';
+    this.store.save();
+    return existing;
+  }
+
   addApiKeyAccount(apiKey, name = '') {
     apiKey = String(apiKey || '').trim();
     if (!apiKey) throw new Error('API key is required');

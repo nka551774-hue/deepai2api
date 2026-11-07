@@ -3,7 +3,7 @@
 > 管理面板參考 [workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub) 的版面與操作流程，繼續使用 DeepAI 上游。
 > 參考版本與 MIT 授權見 `THIRD_PARTY_NOTICES.md`。
 
-將 [deepai.org](https://deepai.org/chat) 的 AI Chat 反向代理成 **OpenAI 相容 API**,附帶多帳號池(帳號池輪替)與 Web 管理面板。零執行期依賴(純 Node.js 18+),支援 Docker 一鍵部署。
+將 [deepai.org](https://deepai.org/chat) 的 AI Chat 反向代理成 **OpenAI 相容 API**,附帶多帳號池(帳號池輪替)與 Web 管理面板。支援 Node.js 22+ 與 Docker 一鍵部署。
 
 ```
 deepai.org chat ──反代──> deepai2api ──OpenAI 格式──> 任何 OpenAI 用戶端
@@ -16,7 +16,8 @@ deepai.org chat ──反代──> deepai2api ──OpenAI 格式──> 任何
   - `GET  /v1/models`
   - `POST /v1/chat/completions`(支援 `stream: true`,reasoning 模型的思維鏈會以 `reasoning_content` delta 串流輸出)
   - `POST /v1/images/generations`(對接上游內建生圖工具 / `/api/text2img`)
-- **上游帳號池**：依帳號權重與使用次數輪替，同一對話優先沿用原帳號。配額耗盡時冷卻，憑證失效時嘗試重登或停用。支援三種帳號類型：
+- **上游帳號池**：依帳號權重與使用次數輪替，同一對話優先沿用原帳號。配額耗盡時冷卻，憑證失效時嘗試重登或停用。支援以下加入方式：
+  - **瀏覽器登入（建議）**：面板產生限時登入連結，在伺服器隔離的 DeepAI 瀏覽器內完成官網登入，驗證成功後自動加入帳號池；不需手動複製 Cookie，也不保存瀏覽器中輸入的密碼
   - **Cookie 匯入**:登入 deepai.org 後,從 DevTools 複製 `api.deepai.org` 任一請求的整行 `cookie:` 貼進面板即可
   - **Email 帳密**:面板填帳密,閘道走官網同款登入流程自動登入、保管 session、過期自動重登
   - **API Key(舊模式)**:deepai dashboard 的持久金鑰
@@ -55,22 +56,26 @@ docker compose logs --tail=100
 
 `.env` 的 `PUBLISH_PORT` 控制主機對外埠，`BIND_ADDRESS` 控制主機監聽位址；容器內固定使用 3737。`TZ` 預設為 `Asia/Taipei`。Compose 會載入 `.env`，直接 `npm start` 則使用目前程序的環境變數。
 
+Compose 預設啟用隔離瀏覽器登入。可用 `BROWSER_LOGIN_ENABLED` 開關功能、`BROWSER_LOGIN_TTL_SECONDS` 調整登入連結有效秒數，以及 `BROWSER_LOGIN_MAX_SESSIONS` 限制同時進行的登入工作階段數。
+
 - 面板:<http://localhost:3737/>（Compose 啟動前必須在 `.env` 填入 `ADMIN_PASSWORD`）
 - API base:`http://localhost:3737/v1`
 
-Windows 本機啟動（PowerShell，建議 Node.js 24；保留 Node.js 18 相容性測試）：
+Windows 本機啟動（PowerShell，需 Node.js 22+）：
 
 ```powershell
 Set-Location 'C:\Users\User\Desktop\2api'
 $env:ADMIN_PASSWORD = '請換成自己的密碼'
+npm ci
 npm start
 ```
 
 開啟 `http://localhost:3737/`，使用設定的面板密碼登入。若曾在面板內改密碼，請用儲存後的新密碼。
 
-離線驗證（無需帳號、無需安裝套件）：
+離線驗證（無需 DeepAI 帳號）：
 
 ```bash
+npm ci
 npm test
 ```
 
@@ -83,16 +88,19 @@ docker build -t deepai2api:verify .
 node scripts/docker-smoke.js deepai2api:verify
 ```
 
-檢查內容包含健康檢查、靜態資源、非 root 程序、時區、帳號／金鑰／設定的重啟持久化及正常停止。
+檢查內容包含健康檢查、靜態資源、非 root 程序、隔離 Chromium 啟動與截圖、時區、帳號／金鑰／設定的重啟持久化及正常停止。
 
 ## 加入帳號到池(擇一)
 
 deepai.org 的 chat **沒有持有式的 API key**:瀏覽器永遠只帶每次新生成的單次 `tryit` key(`api-key` header)+ 登入 session cookie(`credentials: include`)。帳號身份 = cookie。所以池以「帳號」為單位:
 
 1. **匿名模式(零設定)**:池留空 + `ALLOW_ANONYMOUS_FALLBACK=true`,閘道每個請求自動鑄造匿名單次 `tryit` key 模擬訪客。免登入但可能被上游風控。
-2. **Cookie 匯入**：登入 deepai.org → F12 → Network → 選取 `api.deepai.org` 的請求 → Request Headers → 複製 `cookie:` → 面板「帳號 → 新增帳號 → Cookie」貼上，每行一個帳號。
-3. **Email 帳密**：面板「帳號 → 新增帳號 → 帳號密碼」輸入 DeepAI Email 和密碼。閘道儲存工作階段，Cookie 失效時會嘗試重登。
-4. **API Key（舊模式）**：在新增帳號時選 API Key，填入 DeepAI 的持久金鑰。也可透過 `UPSTREAM_KEYS` 或 `ACCOUNT_COOKIES` 環境變數預載。
+2. **瀏覽器登入（建議）**：面板「帳號 → 登入新增 → 產生登入連結」→ 開啟連結 → 在伺服器建立的隔離 DeepAI 瀏覽器中輸入登入資料。登入完成後，閘道會自動驗證 DeepAI 身份並加入帳號池，不需開 DevTools 或複製 Cookie。隔離工作階段結束時會關閉瀏覽器，輸入的密碼不會寫入 `state.json`。
+3. **Cookie 匯入**：登入 deepai.org → F12 → Network → 選取 `api.deepai.org` 的請求 → Request Headers → 複製 `cookie:` → 面板「帳號 → 新增帳號 → Cookie」貼上，每行一個帳號。
+4. **Email 帳密**：面板「帳號 → 新增帳號 → 帳號密碼」輸入 DeepAI Email 和密碼。閘道儲存工作階段，Cookie 失效時會嘗試重登。
+5. **API Key（舊模式）**：在新增帳號時選 API Key，填入 DeepAI 的持久金鑰。也可透過 `UPSTREAM_KEYS` 或 `ACCOUNT_COOKIES` 環境變數預載。
+
+> 遠端部署瀏覽器登入時，面板與登入頁必須透過 HTTPS 提供，反向代理也須保留原始 `Host`。登入連結內含短效瀏覽器控制權杖，只能在可信裝置開啟或分享。Google、Apple 等第三方登入可能因服務商的自動化瀏覽器政策而拒絕登入；能否使用須以實際部署環境測試為準。
 
 > 本專案僅供協定學習與個人研究,請遵守上游服務條款;請勿使用主帳號、勿商業轉售。上游隨時可能收緊風控,使用造成的任何後果自負。
 
@@ -143,7 +151,7 @@ for chunk in r:
 | --- | --- |
 | 總覽 | 請求量、錯誤率、輸出字元、模型統計、上游池健康 |
 | 閘道 | API 位址、對話和生圖端點、模型目錄 |
-| 帳號 | 新增與篩選、分組和權重、批次操作、JSON 備份與還原 |
+| 帳號 | 隔離瀏覽器登入、新增與篩選、分組和權重、批次操作、JSON 備份與還原 |
 | 分析 | 今日、近 7 天及近 30 天的請求量、模型與金鑰用量 |
 | 日誌 | 搜尋請求紀錄，查看模型、狀態、耗時及錯誤 |
 | 設定 | 簽發及管理下游金鑰、模型映射、請求逾時、密碼與介面偏好 |
@@ -166,6 +174,10 @@ for chunk in r:
 | `UPSTREAM_TIMEOUT_MS` | `180000` | 上游單請求超時 |
 | `UPSTREAM_KEYS` | — | 開機時匯入的舊模式 key(逗號分隔) |
 | `ACCOUNT_COOKIES` | — | 開機預載的瀏覽器 Cookie 帳號(換行分隔多個) |
+| `BROWSER_LOGIN_ENABLED` | `true` | 是否允許從面板建立隔離瀏覽器登入工作階段 |
+| `BROWSER_LOGIN_TTL_SECONDS` | `600` | 每個瀏覽器登入工作階段的有效秒數 |
+| `BROWSER_LOGIN_MAX_SESSIONS` | `2` | 同時進行的瀏覽器登入工作階段上限 |
+| `BROWSER_EXECUTABLE_PATH` | 自動偵測 | 本機 `npm start` 使用的 Chrome、Edge 或 Chromium 路徑；Compose 映像通常不需設定 |
 
 ## 專案結構
 

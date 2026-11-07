@@ -2,6 +2,7 @@
 !Dockerfile
 !.dockerignore
 !package.json
+!package-lock.json
 !server.js
 !THIRD_PARTY_NOTICES.md
 !src/

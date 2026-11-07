@@ -4,7 +4,7 @@
  * deepai2api — deepai.org chat reverse proxy with an OpenAI-compatible API,
  * an upstream account key pool and a web admin dashboard.
  *
- * Zero runtime dependencies: requires Node.js 18+ only.
+ * Requires Node.js 22+. Chromium is used for interactive account login.
  */
 const http = require('http');
 const fs = require('fs');
@@ -15,6 +15,8 @@ const { AccountPool } = require('./src/accountPool');
 const { Auth } = require('./src/auth');
 const { createOpenAIRoutes } = require('./src/openaiRoutes');
 const { createAdminRoutes } = require('./src/adminRoutes');
+const { BrowserLogin } = require('./src/browserLogin');
+const { createBrowserLoginRoutes } = require('./src/browserLoginRoutes');
 const { version } = require('./package.json');
 
 function createServer(options = {}) {
@@ -23,10 +25,15 @@ function createServer(options = {}) {
   const auth = options.auth || new Auth(store);
   const openai = createOpenAIRoutes(store, pool);
   const admin = createAdminRoutes(store, pool, auth);
+  const browserLogin = options.browserLogin || new BrowserLogin({ pool, auth, config: CONFIG.browserLogin, upstream: CONFIG.upstream });
+  const loginRoutes = createBrowserLoginRoutes(browserLogin, auth);
 
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     try {
-      const pathname = new URL(req.url, 'http://localhost').pathname;
+      const url = new URL(req.url, 'http://localhost');
+      const { pathname } = url;
+
+      if (await loginRoutes.handle(req, res, url)) return;
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204, {
@@ -67,6 +74,9 @@ function createServer(options = {}) {
       }
     }
   });
+  server.closeBrowserLogin = () => browserLogin.close();
+  server.on('close', () => { void server.closeBrowserLogin(); });
+  return server;
 }
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -126,7 +136,12 @@ function serveStatic(req, res, pathname) {
       return res.end('Not found');
     }
     const ext = path.extname(file).toLowerCase();
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+    const loginHeaders = rel === '/login.html' ? {
+      'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+      'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      'X-Content-Type-Options': 'nosniff',
+    } : {};
+    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache', ...loginHeaders });
     res.end(req.method === 'HEAD' ? undefined : data);
   });
 }
@@ -156,10 +171,11 @@ function start() {
       if (closing) return;
       closing = true;
       console.log(`[deepai2api] ${sig} received, flushing state…`);
-      const finish = () => process.exit(store.flushSync() ? 0 : 1);
+      const stopBrowser = server.closeBrowserLogin();
+      const finish = async () => { await stopBrowser; process.exit(store.flushSync() ? 0 : 1); };
       server.close(finish);
       server.closeIdleConnections?.();
-      setTimeout(finish, 10000).unref();
+      setTimeout(() => process.exit(store.flushSync() ? 0 : 1), 10000).unref();
     });
   }
 }

@@ -4,6 +4,7 @@ services:
     build:
       context: .
     init: true
+    shm_size: 256mb
     restart: unless-stopped
     stop_grace_period: 15s
     ports:
@@ -22,6 +23,9 @@ services:
       MAX_LOG_ENTRIES: ${MAX_LOG_ENTRIES:-500}
       UPSTREAM_KEYS: ${UPSTREAM_KEYS:-}
       ACCOUNT_COOKIES: ${ACCOUNT_COOKIES:-}
+      BROWSER_LOGIN_ENABLED: ${BROWSER_LOGIN_ENABLED:-true}
+      BROWSER_LOGIN_TTL_SECONDS: ${BROWSER_LOGIN_TTL_SECONDS:-600}
+      BROWSER_LOGIN_MAX_SESSIONS: ${BROWSER_LOGIN_MAX_SESSIONS:-2}
     volumes:
       - ./data:/app/data
     logging:

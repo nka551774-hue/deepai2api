@@ -29,6 +29,13 @@ const CONFIG = {
   adminPassword: envStr('ADMIN_PASSWORD', 'deepai2api'),
   adminSessionTtlMs: envInt('ADMIN_SESSION_TTL_HOURS', 12, 1, 24 * 30) * 3600 * 1000,
 
+  browserLogin: {
+    enabled: envBool('BROWSER_LOGIN_ENABLED', true),
+    executablePath: envStr('BROWSER_EXECUTABLE_PATH', ''),
+    ttlMs: envInt('BROWSER_LOGIN_TTL_SECONDS', 600, 60, 1800) * 1000,
+    maxSessions: envInt('BROWSER_LOGIN_MAX_SESSIONS', 2, 1, 4),
+  },
+
   upstream: {
     baseUrl: envStr('UPSTREAM_BASE_URL', 'https://api.deepai.org').replace(/\/+$/, ''),
     origin: envStr('UPSTREAM_ORIGIN', 'https://deepai.org'),

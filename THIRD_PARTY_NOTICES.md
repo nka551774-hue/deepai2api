@@ -5,6 +5,9 @@ The console layout, component styles and interaction design are adapted from
 by ardeyouxipianyi, reference revision `d2343964bd768d87952cc823c373c14cbda4943f`.
 The gateway transport remains the DeepAI implementation in this repository.
 
+The isolated account login uses `playwright-core` (Apache-2.0). Its license
+and notices are included with the npm dependency in the published image.
+
 The following license accompanies the adapted portions:
 
 MIT License

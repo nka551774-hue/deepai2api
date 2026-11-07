@@ -217,7 +217,7 @@ function createAdminRoutes(store, pool, auth) {
         const now = Date.now();
         const gatewayKeys = store.state.gatewayKeys;
         return json(res, 200, {
-          version: '1.1.0',
+          version: require('../package.json').version,
           uptimeMs: Date.now() - startedAt,
           accounts: {
             total: accounts.length,

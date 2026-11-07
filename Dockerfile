@@ -8,14 +8,18 @@ LABEL org.opencontainers.image.title="deepai2api" \
 
 # curl is required by the upstream /api/* transport cascade (the upstream
 # refuses non-browser TLS stacks; calls fall back to a system curl client).
-RUN apk add --no-cache curl su-exec tzdata
+RUN apk add --no-cache curl su-exec tzdata chromium font-noto-cjk
 
 WORKDIR /app
 ENV NODE_ENV=production \
     DATA_DIR=/app/data \
-    HOST=0.0.0.0
+    HOST=0.0.0.0 \
+    BROWSER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
-COPY package.json server.js THIRD_PARTY_NOTICES.md ./
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+
+COPY server.js THIRD_PARTY_NOTICES.md ./
 COPY src ./src
 COPY public ./public
 COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/deepai2api-entrypoint

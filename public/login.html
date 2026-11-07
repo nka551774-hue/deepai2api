@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>DeepAI 安全登录</title>
+  <link rel="stylesheet" href="/login.css">
+</head>
+<body>
+  <main class="login-shell">
+    <header class="login-topbar">
+      <div class="login-brand"><span class="brand-mark">D</span><div><strong>DeepAI</strong><span data-i18n="isolatedBrowser">隔离登录视窗</span></div></div>
+      <div class="topbar-actions">
+        <select id="languageSelect" aria-label="Language"><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="en">English</option></select>
+        <button id="backBtn" type="button" class="icon-btn" data-command="back" data-i18n-aria="back" title="返回" disabled>←</button>
+        <button id="reloadBtn" type="button" class="icon-btn" data-command="reload" data-i18n-aria="reload" title="重新载入" disabled>↻</button>
+      </div>
+    </header>
+
+    <section class="browser-card" aria-labelledby="pageTitle">
+      <div class="browser-chrome">
+        <div class="traffic-lights" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="address-bar"><span class="lock-mark" aria-hidden="true">▣</span><span id="pageHost">deepai.org</span></div>
+        <span id="countdown" class="countdown">--:--</span>
+      </div>
+      <div class="browser-meta">
+        <div><h1 id="pageTitle" data-i18n="connecting">正在连接安全登录视窗</h1><p id="pageUrl">DeepAI</p></div>
+        <span id="statusBadge" class="status-badge waiting" data-i18n="waiting">等待中</span>
+      </div>
+      <div id="notice" class="notice" data-i18n="privacyNotice">在隔离视窗登录 DeepAI，系统自动加入账号池；不保存密码。</div>
+
+      <div id="viewport" class="browser-viewport" tabindex="0" aria-label="DeepAI browser viewport">
+        <img id="browserFrame" alt="DeepAI login page" draggable="false" hidden>
+        <div id="framePlaceholder" class="frame-placeholder"><span class="spinner"></span><p data-i18n="preparingBrowser">正在准备隔离浏览器…</p></div>
+        <div id="terminalState" class="terminal-state" hidden><div id="terminalIcon" class="terminal-icon">✓</div><h2 id="terminalTitle"></h2><p id="terminalMessage"></p></div>
+      </div>
+
+      <div class="key-strip" aria-label="Keyboard controls">
+        <button type="button" data-key="Tab" disabled>Tab</button><button type="button" data-key="Enter" disabled>Enter</button><button type="button" data-key="Backspace" disabled>⌫</button><button type="button" data-key="Escape" disabled>Esc</button>
+        <span data-i18n="keyboardHint">也可直接使用键盘、点击画面或滚轮操作</span>
+      </div>
+
+      <form id="mobileInputForm" class="mobile-input-form">
+        <select id="mobileInputType" aria-label="Input type" disabled><option value="text" data-i18n="textInput">文字</option><option value="password" data-i18n="passwordInput">密码</option></select>
+        <input id="mobileTextInput" type="text" autocomplete="off" data-i18n-placeholder="mobileInputPlaceholder" placeholder="输入文字后发送" disabled>
+        <button type="submit" class="primary" data-i18n="sendText" disabled>发送</button>
+      </form>
+      <p class="mobile-input-hint" data-i18n="mobileInputHint">手机输入时，先点击画面中的输入框，再在这里输入；内容只发送到隔离浏览器。</p>
+    </section>
+
+    <footer class="login-footer"><span id="connectionStatus" data-i18n="secureSession">安全会话已建立</span><button id="cancelBtn" type="button" class="danger" data-i18n="cancelLogin">取消登录</button></footer>
+  </main>
+  <script src="/login.js"></script>
+</body>
+</html>
