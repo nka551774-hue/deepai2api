@@ -1,5 +1,8 @@
 # deepai2api
 
+> 面板 UI 改编自 [workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)(MIT License,© ardeyouxipianyi)——登录闸门 / 侧边导航
+> (总览·网关·账号·分析·日志·设置)/ 组件样式原样沿用,数据层对接本网关的 DeepAI 账号池。
+
 將 [deepai.org](https://deepai.org/chat) 的 AI Chat 反向代理成 **OpenAI 相容 API**,附帶多帳號池(帳號池輪替)與 Web 管理面板。零執行期依賴(純 Node.js 18+),支援 Docker 一鍵部署。
 
 ```

@@ -19,7 +19,7 @@ function createAdminRoutes(store, pool, auth) {
   function tokenOf(req) {
     const h = req.headers['authorization'] || '';
     if (h.toLowerCase().startsWith('bearer ')) return h.slice(7).trim();
-    return String(req.headers['x-admin-token'] || '').trim();
+    return String(req.headers['x-admin-token'] || req.headers['x-panel-token'] || '').trim();
   }
 
   function guard(req, res) {
@@ -61,6 +61,40 @@ function createAdminRoutes(store, pool, auth) {
   return {
     async handle(req, res, pathname) {
       const route = `${req.method} ${pathname}`;
+
+      // ---- panel session (workbuddy-compatible contract) --------------------
+      if (route === 'GET /panel/status') {
+        return json(res, 200, {
+          panel_password_required: true,
+          panel_password_is_default: auth.panelPasswordIsDefault(),
+          authenticated: auth.isAdmin(tokenOf(req)),
+          crypto_ok: true,
+          api_key_set: store.state.gatewayKeys.some((k) => k.enabled),
+        });
+      }
+      if (route === 'POST /panel/login') {
+        const body = await readBody(req);
+        const token = auth.login(body.password ?? '', Boolean(body.remember));
+        if (!token) return json(res, 401, { ok: false, error: 'wrong password' });
+        return json(res, 200, { ok: true, token });
+      }
+      if (route === 'POST /panel/logout') {
+        auth.logout(tokenOf(req));
+        return json(res, 200, { ok: true });
+      }
+      if (route === 'POST /panel/password') {
+        if (!auth.isAdmin(tokenOf(req))) return json(res, 401, { ok: false, error: 'unauthorized' });
+        const body = await readBody(req);
+        // current password is required unless it is still the default
+        if (!auth.panelPasswordIsDefault()) {
+          const cur = auth.login(body.current ?? '', false);
+          if (!cur) return json(res, 400, { ok: false, error: 'current password incorrect' });
+        }
+        const next = String(body.next ?? '');
+        if (next.length < 1) return json(res, 400, { ok: false, error: 'new password required' });
+        auth.setPanelPassword(next);
+        return json(res, 200, { ok: true });
+      }
 
       // ---- login/logout (no auth) ------------------------------------------
       if (route === 'POST /api/admin/login') {
@@ -254,6 +288,92 @@ function createAdminRoutes(store, pool, auth) {
       if (route === 'GET /api/admin/logs') {
         const limit = Math.min(200, Math.max(1, parseInt(new URL(req.url, 'http://x').searchParams.get('limit') || '100', 10) || 100));
         return json(res, 200, { logs: store.state.logs.slice(0, limit) });
+      }
+      if (route === 'POST /api/admin/logs/clear') {
+        store.state.logs = [];
+        store.save();
+        return json(res, 200, { ok: true });
+      }
+
+      // ---- analytics (bucketed from the request-log ring) -------------------------
+      if (route === 'GET /api/admin/analytics') {
+        const range = new URL(req.url, 'http://x').searchParams.get('range') || '7d';
+        const days = range === 'today' ? 1 : range === '30d' ? 30 : 7;
+        const logs = store.state.logs.filter((l) => l.ts && l.kind);
+        const byDay = new Map();
+        const byHour = new Map();
+        const perModel = new Map();
+        const perKey = new Map();
+        let total = 0;
+        let errors = 0;
+        let chars = 0;
+        let latencySum = 0;
+        let latencyN = 0;
+        const sinceMs = Date.now() - days * 24 * 3600 * 1000;
+        for (const l of logs) {
+          const t = Date.parse(l.ts);
+          if (!Number.isFinite(t)) continue;
+          if (days > 1 && t < sinceMs) continue;
+          if (days === 1 && t < sinceMs - 6 * 3600 * 1000) continue; // today keeps late-night history
+          const ok = l.status === 'ok';
+          total += 1;
+          if (!ok) errors += 1;
+          if (l.chars) chars += l.chars || 0;
+          if (l.latencyMs) {
+            latencySum += l.latencyMs;
+            latencyN += 1;
+          }
+          const d = l.ts.slice(0, 10);
+          const day = (byDay.get(d) || { date: d, requests: 0, errors: 0, chars: 0 });
+          day.requests += 1;
+          if (!ok) day.errors += 1;
+          day.chars += l.chars || 0;
+          byDay.set(d, day);
+          const h = l.ts.slice(11, 13);
+          const hour = (byHour.get(h) || { hour: h, requests: 0, errors: 0 });
+          hour.requests += 1;
+          if (!ok) hour.errors += 1;
+          byHour.set(h, hour);
+          const m = (perModel.get(l.model || 'unknown') || { model: l.model || 'unknown', requests: 0, errors: 0, chars: 0, latencyMs: 0, latencyN: 0 });
+          m.requests += 1;
+          if (!ok) m.errors += 1;
+          m.chars += l.chars || 0;
+          if (l.latencyMs) {
+            m.latencyMs += l.latencyMs;
+            m.latencyN += 1;
+          }
+          perModel.set(m.model, m);
+          const g = (perKey.get(l.gatewayKey || 'open-mode') || { key: l.gatewayKey || 'open-mode', requests: 0, errors: 0 });
+          g.requests += 1;
+          if (!ok) g.errors += 1;
+          perKey.set(g.key, g);
+        }
+        const dayList = [];
+        for (let i = days - 1; i >= 0; i--) {
+          const d = new Date(Date.now() - i * 24 * 3600 * 1000).toISOString().slice(0, 10);
+          dayList.push(byDay.get(d) || { date: d, requests: 0, errors: 0, chars: 0 });
+        }
+        const hourList = [];
+        for (let h = 0; h < 24; h++) {
+          const key = String(h).padStart(2, '0');
+          hourList.push(byHour.get(key) || { hour: key, requests: 0, errors: 0 });
+        }
+        return json(res, 200, {
+          range,
+          kpis: {
+            requests: total,
+            errors,
+            errorRate: total ? +(errors / total * 100).toFixed(1) : 0,
+            chars,
+            avgLatencyMs: latencyN ? Math.round(latencySum / latencyN) : 0,
+          },
+          days: dayList,
+          hours: hourList,
+          perModel: [...perModel.values()]
+            .map((m) => ({ ...m, latencyMs: m.latencyN ? Math.round(m.latencyMs / m.latencyN) : 0 }))
+            .sort((a, b) => b.requests - a.requests),
+          perGatewayKey: [...perKey.values()].sort((a, b) => b.requests - a.requests),
+        });
       }
 
       // ---- settings ---------------------------------------------------------------

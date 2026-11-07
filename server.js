@@ -128,7 +128,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---- admin panel backend ---------------------------------------------
-    if (pathname.startsWith('/api/admin/')) {
+    if (pathname.startsWith('/api/admin/') || pathname.startsWith('/panel/')) {
       return admin.handle(req, res, pathname);
     }
 

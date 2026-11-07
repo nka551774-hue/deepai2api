@@ -44,6 +44,8 @@ const CONFIG = {
     timeoutMs: envInt('UPSTREAM_TIMEOUT_MS', 180000, 5000, 600000),
     taskPollIntervalMs: envInt('TASK_POLL_INTERVAL_MS', 1500, 250, 15000),
     taskPollTimeoutMs: envInt('TASK_POLL_TIMEOUT_MS', 180000, 5000, 600000),
+    // The live browser (deepai.org/zh-hans/chat) sends this dialect; empty disables.
+    language: envStr('UPSTREAM_LANGUAGE', 'zh-hans'),
   },
 
   // Fall back to single-use anonymous tryit keys when the account pool is

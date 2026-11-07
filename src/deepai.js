@@ -89,6 +89,10 @@ class DeepAIClient {
     if (this.deviceId && !c.includes('deepai_device_id=')) {
       parts.push(`deepai_device_id=${this.deviceId}`);
     }
+    const lang = CONFIG.upstream.language;
+    if (lang && !c.includes('deepai_lang=')) {
+      parts.push(`deepai_lang=${lang}`);
+    }
     return parts.join('; ');
   }
 
@@ -98,12 +102,14 @@ class DeepAIClient {
    * per request (hash-validated against this UA) plus session cookies.
    */
   headers() {
+    const lang = CONFIG.upstream.language;
     return {
       'api-key': this.apiKey || mintTryItKey(CONFIG.upstream.userAgent),
       Origin: CONFIG.upstream.origin,
       Referer: `${CONFIG.upstream.origin}/`,
       'User-Agent': CONFIG.upstream.userAgent,
       Accept: '*/*',
+      ...(lang && lang !== 'en' ? { 'X-DeepAI-Language': lang } : {}),
       ...(this.cookieHeader() ? { Cookie: this.cookieHeader() } : {}),
     };
   }

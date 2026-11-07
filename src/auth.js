@@ -21,12 +21,29 @@ class Auth {
 
   // ---- admin panel -----------------------------------------------------------
 
-  login(password) {
+  /** Effective panel password: a password changed from the panel is stored
+   *  (hashed) in state.json and wins over the ADMIN_PASSWORD env default. */
+  panelPasswordHash() {
+    const s = this.store.state.settings;
+    return s.panelPasswordHash || this.sha256(CONFIG.adminPassword);
+  }
+
+  panelPasswordIsDefault() {
+    return !this.store.state.settings.panelPasswordHash;
+  }
+
+  setPanelPassword(next) {
+    this.store.state.settings.panelPasswordHash = this.sha256(String(next));
+    this.store.save();
+  }
+
+  login(password, remember = false) {
     const a = Buffer.from(this.sha256(String(password)));
-    const b = Buffer.from(this.sha256(CONFIG.adminPassword));
+    const b = Buffer.from(this.panelPasswordHash());
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
     const token = crypto.randomBytes(32).toString('hex');
-    this.sessions.set(token, { expiresAt: Date.now() + CONFIG.adminSessionTtlMs });
+    const ttl = remember ? 30 * 24 * 3600 * 1000 : CONFIG.adminSessionTtlMs;
+    this.sessions.set(token, { expiresAt: Date.now() + ttl });
     return token;
   }
 
