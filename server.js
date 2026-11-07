@@ -11,22 +11,28 @@ const fs = require('fs');
 const path = require('path');
 const { CONFIG } = require('./src/config');
 const { Store } = require('./src/store');
-const { KeyPool } = require('./src/keyPool');
+const { AccountPool } = require('./src/accountPool');
 const { Auth } = require('./src/auth');
 const { createOpenAIRoutes } = require('./src/openaiRoutes');
 const { createAdminRoutes } = require('./src/adminRoutes');
 
 const store = new Store();
-const pool = new KeyPool(store);
+const pool = new AccountPool(store);
 const auth = new Auth(store);
 const openai = createOpenAIRoutes(store, pool);
 const admin = createAdminRoutes(store, pool, auth);
 
-// Seed upstream keys from UPSTREAM_KEYS once at boot (existing keys are kept).
+// Seed accounts at boot (existing entries are kept).
+// UPSTREAM_KEYS: legacy dashboard keys; ACCOUNT_COOKIES: browser session cookies.
 for (const seedKey of CONFIG.upstreamSeedKeys) {
   try {
-    pool.addKey(seedKey, 'env-seed');
+    pool._addAccount({ type: 'apikey', apiKey: seedKey, name: 'env-seed-key' });
   } catch { /* duplicate — ignore */ }
+}
+for (const seedCookie of CONFIG.accountSeedCookies) {
+  try {
+    pool.addCookieAccount(seedCookie, 'env-seed-cookie');
+  } catch { /* malformed — ignore */ }
 }
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -143,7 +149,7 @@ server.listen(CONFIG.port, CONFIG.host, () => {
   console.log(`[deepai2api] listening on http://${CONFIG.host}:${CONFIG.port}`);
   console.log(`[deepai2api] dashboard: http://localhost:${CONFIG.port}/  (password from ADMIN_PASSWORD, default "deepai2api")`);
   console.log(`[deepai2api] OpenAI-compatible base URL: http://localhost:${CONFIG.port}/v1`);
-  console.log(`[deepai2api] upstream keys in pool: ${pool.list().length}; anonymous fallback: ${anonNote}`);
+  console.log(`[deepai2api] upstream accounts in pool: ${pool.list().length}; anonymous fallback: ${anonNote}`);
 });
 
 for (const sig of ['SIGINT', 'SIGTERM']) {

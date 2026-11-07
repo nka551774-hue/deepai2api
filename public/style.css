@@ -140,6 +140,15 @@ main { padding: 26px 28px 60px; max-width: 1400px; }
 .pill-list { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* ---------- settings ---------- */
+.add-mode-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+.mode-tab {
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  padding: 7px 16px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 13px;
+  border-bottom: none;
+}
+.mode-tab.active { background: #16213a; color: var(--text); font-weight: 600; }
+#mode-cookie textarea { width: 100%; margin-bottom: 10px; font-family: Consolas, monospace; font-size: 12px; }
+
 .form-grid { display: grid; grid-template-columns: 220px 1fr; gap: 12px 14px; align-items: center; }
 .form-grid label { color: var(--muted); }
 .form-grid input[type="checkbox"] { width: auto; }

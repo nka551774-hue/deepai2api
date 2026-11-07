@@ -53,10 +53,12 @@ class Auth {
    */
   resolveGatewayKey(provided) {
     const providedStr = String(provided || '').trim();
+    // Open mode (no keys issued yet): accept any or no credential, so
+    // clients that force a non-empty api key (e.g. the OpenAI SDK) work.
+    if (CONFIG.allowOpenWhenNoKeys && this.store.state.gatewayKeys.length === 0) {
+      return { entry: null, open: true };
+    }
     if (!providedStr) {
-      if (CONFIG.allowOpenWhenNoKeys && this.store.state.gatewayKeys.length === 0) {
-        return { entry: null, open: true };
-      }
       return { entry: null, open: false };
     }
     const hash = this.sha256(providedStr);

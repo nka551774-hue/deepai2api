@@ -22,7 +22,7 @@ const DEFAULTS = () => ({
     passThroughModels: true,
     requestTimeoutMs: CONFIG.upstream.timeoutMs,
   },
-  upstreamKeys: [], // { id, key, name, status: active|disabled|exhausted, deviceId, uses, errors, lastUsedAt, lastErrorAt, lastErrorMessage, cooldownUntil }
+  accounts: [],     // { id, name, type: cookie|login|apikey, cookie, email, password, apiKey, status, deviceId, uses, errors, … }
   gatewayKeys: [],  // { id, key, name, enabled, models: [] (empty = all), requestLimit: 0 (0 = unlimited), uses, tokens, createdAt, lastUsedAt }
   stats: {
     totalRequests: 0,
@@ -50,9 +50,10 @@ class Store {
       const data = JSON.parse(raw);
       // Merge so newly added fields keep working on old state files.
       const dflt = DEFAULTS();
+      const accounts = migrateOldKeys(data, dflt);
       this.state = {
         settings: { ...dflt.settings, ...(data.settings || {}) },
-        upstreamKeys: Array.isArray(data.upstreamKeys) ? data.upstreamKeys : [],
+        accounts,
         gatewayKeys: Array.isArray(data.gatewayKeys) ? data.gatewayKeys : [],
         stats: { ...dflt.stats, ...(data.stats || {}), perModel: data.stats?.perModel || {}, perGatewayKey: data.stats?.perGatewayKey || {} },
         logs: Array.isArray(data.logs) ? data.logs : [],
@@ -126,6 +127,37 @@ class Store {
     }
     this.save();
   }
+}
+
+/** v1 state (`upstreamKeys`) → v2 accounts (type 'apikey'), plus accountId fixups. */
+function migrateOldKeys(data, dflt) {
+  const accounts = Array.isArray(data.accounts) ? data.accounts : [];
+  const legacy = Array.isArray(data.upstreamKeys) ? data.upstreamKeys : [];
+  for (const old of legacy) {
+    if (accounts.some((a) => a.id === old.id || a.apiKey === old.key)) continue;
+    accounts.push({
+      id: old.id,
+      name: old.name || 'legacy-key',
+      type: 'apikey',
+      cookie: '',
+      email: '',
+      password: '',
+      apiKey: old.key,
+      status: old.status || 'active',
+      deviceId: old.deviceId,
+      uses: old.uses || 0,
+      errors: old.errors || 0,
+      lastUsedAt: old.lastUsedAt || null,
+      lastErrorAt: old.lastErrorAt || null,
+      lastErrorMessage: old.lastErrorMessage || '',
+      cooldownUntil: old.cooldownUntil || null,
+      sessionUuid: null,
+      userInfo: null,
+      cookieUpdatedAt: null,
+      createdAt: old.createdAt || new Date().toISOString(),
+    });
+  }
+  return accounts;
 }
 
 module.exports = { Store };

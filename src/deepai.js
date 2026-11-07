@@ -13,11 +13,17 @@
  *        or {"task_id":…} for async reasoning, or {"status":…} refusals
  *
  * Every request needs a per-account identity (session uuid + device cookie) —
- * the pool in keyPool.js manages those.
+ * the pool in accountPool.js manages those.
+ *
+ * Account identity on deepai.org is cookie-based, not key-based: the browser
+ * always sends a freshly minted single-use tryit key in `api-key` plus the
+ * logged-in session cookies via credentials:'include'. The gateway mirrors
+ * that: each account stores its cookie jar; `api-key` is a per-request
+ * minted tryit key (unless the account carries a real dashboard key).
  */
 const { CONFIG } = require('./config');
 const { StreamParser } = require('./streamParser');
-const { uuid, isTryItKey } = require('./islandHash');
+const { uuid, isTryItKey, mintTryItKey } = require('./islandHash');
 
 class UpstreamError extends Error {
   constructor(message, { code = 'UPSTREAM_ERROR', retryable = false, status = 0, body = null } = {}) {
@@ -64,25 +70,41 @@ function detectJsonStatus(raw) {
 class DeepAIClient {
   /**
    * @param {object} account
-   * @param {string} account.key       api-key (account key or single-use tryit)
-   * @param {string} [account.deviceId] stable deepai_device_id cookie value
+   * @param {string} [account.apiKey]    real dashboard key; omitted → per-request tryit key
+   * @param {string} [account.cookie]    logged-in session cookie header ("a=b; c=d")
+   * @param {string} [account.deviceId]  stable deepai_device_id cookie value
    */
   constructor(account) {
-    this.key = account.key;
+    this.apiKey = account.apiKey || null;
+    this.cookie = account.cookie || '';
     this.deviceId = account.deviceId || null;
     this.sessionUuid = uuid();
   }
 
-  /** Browser-identical headers. Anonymous tryit keys are single-use; the pool
-   *  mints a fresh one before every call, so `key` is always request-scoped. */
+  /** Full Cookie header: account session cookies + the device id joined in. */
+  cookieHeader() {
+    const parts = [];
+    const c = String(this.cookie || '').trim();
+    if (c) parts.push(c);
+    if (this.deviceId && !c.includes('deepai_device_id=')) {
+      parts.push(`deepai_device_id=${this.deviceId}`);
+    }
+    return parts.join('; ');
+  }
+
+  /**
+   * Browser-identical headers. The upstream chat surface never sees a
+   * persistent account key: the browser sends a fresh single-use tryit key
+   * per request (hash-validated against this UA) plus session cookies.
+   */
   headers() {
     return {
-      'api-key': this.key,
+      'api-key': this.apiKey || mintTryItKey(CONFIG.upstream.userAgent),
       Origin: CONFIG.upstream.origin,
       Referer: `${CONFIG.upstream.origin}/`,
       'User-Agent': CONFIG.upstream.userAgent,
       Accept: '*/*',
-      ...(this.deviceId ? { Cookie: `deepai_device_id=${this.deviceId}` } : {}),
+      ...(this.cookieHeader() ? { Cookie: this.cookieHeader() } : {}),
     };
   }
 
@@ -308,12 +330,10 @@ class DeepAIClient {
   /** POST a multipart /api/* call through the system curl binary. */
   async runApiViaCurl(url, fields) {
     const { spawn } = require('child_process');
-    // Single-use tryit keys were consumed by the fetch attempt: mint a fresh one.
+    // The fetch attempt already consumed the single-use tryit key: mint a
+    // fresh one unless this client carries a real dashboard key.
     const h = this.headers();
-    if (isTryItKey(this.key)) {
-      const { mintTryItKey } = require('./islandHash');
-      h['api-key'] = mintTryItKey(CONFIG.upstream.userAgent);
-    }
+    if (!this.apiKey) h['api-key'] = mintTryItKey(CONFIG.upstream.userAgent);
     const args = ['-s', '--max-time', '120', '-X', 'POST', url];
     for (const [k, v] of Object.entries(h)) args.push('-H', `${k}: ${v}`);
     for (const [k, v] of Object.entries(fields || {})) {
@@ -371,4 +391,83 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-module.exports = { DeepAIClient, UpstreamError, classifyRefusal, detectJsonStatus };
+// ============================================================================
+//  Account auth (deepai.org session is cookie-based)
+// ============================================================================
+
+/** Collect Set-Cookie pairs from a response as "a=b; c=d". */
+function cookieFromResponse(res, prior = '') {
+  const pairs = new Map();
+  for (const c of String(prior || '').split(/;\s*/)) {
+    const i = c.indexOf('=');
+    if (i > 0) pairs.set(c.slice(0, i).trim(), c.slice(i + 1).trim());
+  }
+  const setCookies =
+    typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
+  for (const sc of setCookies) {
+    const first = sc.split(';')[0];
+    const i = first.indexOf('=');
+    if (i > 0) pairs.set(first.slice(0, i).trim(), first.slice(i + 1).trim());
+  }
+  return [...pairs.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
+/**
+ * Log in to deepai.org with email + password (the site's own login dialect:
+ * POST /daily-time-sync/login/ with FormData username/password).
+ *
+ * @returns {Promise<{ok:boolean, status:number, cookie:string, body:string}>}
+ */
+async function loginAccount(email, password) {
+  const base = { Origin: CONFIG.upstream.origin, Referer: `${CONFIG.upstream.origin}/`, 'User-Agent': CONFIG.upstream.userAgent };
+
+  // Bootstrap: preflight the auth surface so the csrftoken cookie exists,
+  // exactly like any page load before the login modal does.
+  let priorCookie = '';
+  try {
+    const pre = await fetch(`${CONFIG.upstream.baseUrl}/daily-time-sync/user/`, {
+      method: 'GET',
+      headers: { ...base, 'api-key': mintTryItKey(CONFIG.upstream.userAgent), Accept: '*/*' },
+    });
+    priorCookie = cookieFromResponse(pre);
+  } catch {
+    /* proceed without preflight */
+  }
+
+  const form = new FormData();
+  form.append('username', String(email || ''));
+  form.append('password', String(password || ''));
+  const res = await fetch(`${CONFIG.upstream.baseUrl}/daily-time-sync/login/`, {
+    method: 'POST',
+    body: form,
+    headers: { ...base, Accept: '*/*', ...(priorCookie ? { Cookie: priorCookie } : {}) },
+  });
+  const body = await res.text().catch(() => '');
+  const cookie = cookieFromResponse(res, priorCookie);
+  if (!res.ok) {
+    return { ok: false, status: res.status, cookie, body: body.slice(0, 300) };
+  }
+  return { ok: true, status: res.status, cookie, body: body.slice(0, 300) };
+}
+
+/**
+ * Query the logged-in user object (GET /daily-time-sync/user/).
+ * @returns {Promise<{ok:boolean, user:object|null, status:number}>}
+ */
+async function fetchUser(cookie, deviceId) {
+  const client = new DeepAIClient({ cookie, deviceId });
+  const res = await fetch(`${CONFIG.upstream.baseUrl}/daily-time-sync/user/`, {
+    method: 'GET',
+    headers: client.headers(),
+  });
+  const body = await res.text().catch(() => '');
+  let user = null;
+  try {
+    user = JSON.parse(body);
+  } catch {
+    /* not JSON */
+  }
+  return { ok: res.ok && Boolean(user), user, status: res.status };
+}
+
+module.exports = { DeepAIClient, UpstreamError, classifyRefusal, detectJsonStatus, loginAccount, fetchUser, cookieFromResponse };

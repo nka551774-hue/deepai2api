@@ -23,7 +23,7 @@
     <div class="brand">deepai<span class="accent">2api</span> <span class="muted small">v1.0.0</span></div>
     <nav class="tabs" id="tabs">
       <button data-tab="dashboard" class="tab active">總覽</button>
-      <button data-tab="keys" class="tab">上游帳號池</button>
+      <button data-tab="keys" class="tab">帳號池</button>
       <button data-tab="gateway" class="tab">API 金鑰</button>
       <button data-tab="logs" class="tab">請求日誌</button>
       <button data-tab="settings" class="tab">設定</button>
@@ -51,23 +51,40 @@
       </div>
     </section>
 
-    <!-- ============ upstream keys ============ -->
+    <!-- ============ account pool ============ -->
     <section id="tab-keys" class="tab-panel">
       <div class="panel">
-        <h3>新增上游帳號 Key</h3>
-        <p class="muted">填入 deepai.org 重建的 API Key(瀏覽器對 api.deepai.org 請求的 <code>api-key</code> header)。可一次貼多把,以空白或逗號分隔。留空池時,閘道會使用匿名的單次 tryit key(若已啟用 fallback)。</p>
-        <div class="row">
-          <input type="text" id="new-key" placeholder="例如 quick_login-…(或貼上整把 key)" style="flex:1">
-          <input type="text" id="new-key-name" placeholder="備註名稱(選填)">
-          <button class="btn primary" id="add-key-btn">加入</button>
+        <h3>新增帳號</h3>
+        <div class="add-mode-tabs">
+          <button class="mode-tab active" data-mode="cookie">瀏覽器 Cookie 匯入</button>
+          <button class="mode-tab" data-mode="login">Email 帳密(自動登入)</button>
+        </div>
+
+        <div id="mode-cookie">
+          <p class="muted">登入 <a href="https://deepai.org/chat" target="_blank" rel="noreferrer">deepai.org</a> 後按 <b>F12</b> → Network → 隨便點一個 <code>api.deepai.org</code> 的請求 → Request Headers → 找到 <code>cookie:</code> → 複製整行值貼到下面。多個帳號可一行一個。<br>之後對話會自動輪流用池內的帳號(session),配額耗盡自動冷卻換下一個。</p>
+          <textarea id="new-cookie" rows="3" placeholder="貼上整段 Cookie header(或每行一個帳號)" spellcheck="false"></textarea>
+          <div class="row">
+            <input type="text" id="new-cookie-name" placeholder="備註名稱(選填)" style="max-width:260px">
+            <button class="btn primary" id="add-cookie-btn">加入池</button>
+          </div>
+        </div>
+
+        <div id="mode-login" class="hidden">
+          <p class="muted">直接填 deepai.org 的 Email 與密碼,閘道會用官網同款登入流程(<code>/daily-time-sync/login/</code>)自動登入並保管 session;cookie 過期自動重登。</p>
+          <div class="row">
+            <input type="text" id="new-login-email" placeholder="Email">
+            <input type="password" id="new-login-password" placeholder="密碼">
+            <button class="btn primary" id="add-login-btn">登入並加入</button>
+          </div>
         </div>
       </div>
       <div class="panel">
         <h3>帳號池</h3>
         <table class="table">
-          <thead><tr><th>名稱</th><th>Key</th><th>狀態</th><th>使用</th><th>錯誤</th><th>最近使用</th><th>最近錯誤</th><th>操作</th></tr></thead>
+          <thead><tr><th>帳號</th><th>類型</th><th>狀態</th><th>方案/點數</th><th>使用</th><th>錯誤</th><th>最近錯誤</th><th>操作</th></tr></thead>
           <tbody id="keys-body"></tbody>
         </table>
+        <p class="muted small">池為空時,只要開啟 ALLOW_ANONYMOUS_FALLBACK,閘道會用匿名的單次 tryit key(訪客模式)回應——免費但不穩定;建議加入帳號。</p>
       </div>
     </section>
 

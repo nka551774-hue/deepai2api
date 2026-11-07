@@ -56,9 +56,14 @@ const CONFIG = {
   maxLogEntries: envInt('MAX_LOG_ENTRIES', 500, 50, 5000),
   logBodyPreview: 200,
 
-  // Optionally seed the upstream key pool at boot (comma/space separated).
+  // Optionally seed the upstream account pool at boot (comma/space separated).
   upstreamSeedKeys: envStr('UPSTREAM_KEYS', '')
     .split(/[\s,;]+/)
+    .map((s) => s.trim())
+    .filter(Boolean),
+  // Browser session cookies imported from DevTools ("a=b; c=d").
+  accountSeedCookies: envStr('ACCOUNT_COOKIES', '')
+    .split(/[\n]+/)
     .map((s) => s.trim())
     .filter(Boolean),
 };

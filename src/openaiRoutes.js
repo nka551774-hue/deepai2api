@@ -15,7 +15,7 @@ const { extractCredential, Auth } = require('./auth');
 
 /**
  * @param {import('./store').Store} store
- * @param {import('./keyPool').KeyPool} pool
+ * @param {import('./accountPool').AccountPool} pool
  */
 function createOpenAIRoutes(store, pool) {
   const settings = () => store.state.settings;

@@ -80,7 +80,7 @@ async function refreshOverview() {
     ${card('總請求數', fmtNum(s.totalRequests))}
     ${card('錯誤數', `${fmtNum(s.totalErrors)} <span class="muted small">(${errRate}%)</span>`)}
     ${card('輸出字元', fmtNum(s.totalChars))}
-    ${card('可用上游 Key', fmtNum(o.upstream.usable) + ' / ' + fmtNum(o.upstream.total))}
+    ${card('可用帳號', fmtNum(o.accounts.usable) + ' / ' + fmtNum(o.accounts.total))}
     ${card('已簽發 API Key', fmtNum(o.gateway.enabled) + ' / ' + fmtNum(o.gateway.total))}
     ${card('執行時間', fmtMs(o.uptimeMs))}`;
 
@@ -91,10 +91,11 @@ async function refreshOverview() {
     : '<tr><td colspan="4" class="muted">尚無資料</td></tr>';
 
   $('#upstream-status').innerHTML = `
-    ${pill(o.upstream.usable > 0 ? 'ok' : 'warn', o.upstream.usable > 0 ? '上游可用' : '上游池空')}
-    ${pill(o.upstream.disabled ? 'err' : 'muted', `${o.upstream.disabled} 停用`)}
-    ${pill(o.upstream.exhausted ? 'warn' : 'muted', `${o.upstream.exhausted} 冷卻/耗盡`)}
-    ${pill(o.upstream.anonymousFallback ? 'ok' : 'muted', o.upstream.anonymousFallback ? '匿名 fallback 開啟' : '匿名 fallback 關閉')}`;
+    ${pill(o.accounts.usable > 0 ? 'ok' : 'warn', o.accounts.usable > 0 ? '帳號池可用' : '帳號池空(僅匿名 fallback)')}
+    ${pill('muted', `Cookie ${o.accounts.byType.cookie} · 帳密 ${o.accounts.byType.login} · Key ${o.accounts.byType.apikey}`)}
+    ${pill(o.accounts.disabled ? 'err' : 'muted', `${o.accounts.disabled} 停用`)}
+    ${pill(o.accounts.cooling ? 'warn' : 'muted', `${o.accounts.cooling} 冷卻/耗盡`)}
+    ${pill(o.accounts.anonymousFallback ? 'ok' : 'muted', o.accounts.anonymousFallback ? '匿名 fallback 開啟' : '匿名 fallback 關閉')}`;
 
   $('#uptime').textContent = `已執行 ${fmtMs(o.uptimeMs)}`;
   $('#usage-snippet').textContent = usageSnippet(o);
@@ -129,49 +130,70 @@ function usageSnippet(o) {
   ].join('\n');
 }
 
-/* ---------------- upstream keys ---------------- */
+/* ---------------- account pool ---------------- */
+window.copyText = async (t) => { try { await navigator.clipboard.writeText(t); toast('已複製'); } catch { /* ignore */ } };
+
+document.querySelectorAll('.mode-tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.mode-tab').forEach((b) => b.classList.toggle('active', b === btn));
+    $('#mode-cookie').classList.toggle('hidden', btn.dataset.mode !== 'cookie');
+    $('#mode-login').classList.toggle('hidden', btn.dataset.mode !== 'login');
+  });
+});
+
+const TYPE_LABEL = { cookie: 'Cookie', login: '帳密', apikey: 'API Key(舊)' };
+
 async function loadKeys() {
-  const { keys } = await api('/api/admin/keys');
-  $('#keys-body').innerHTML = keys.length
-    ? keys.map((k) => keyRow(k)).join('')
-    : '<tr><td colspan="8" class="muted">尚無上游 Key。池為空時若啟用匿名 fallback,閘道會自動使用單次 tryit key。</td></tr>';
-  bindKeyActions(keys);
+  const { accounts } = await api('/api/admin/accounts');
+  $('#keys-body').innerHTML = accounts.length
+    ? accounts.map((a) => keyRow(a)).join('')
+    : '<tr><td colspan="8" class="muted">池是空的。匿名 fallback 開啟時可用訪客模式回應;建議匯入 deepai.org 帳號(Cookie 或帳密)以獲得穩定配額。</td></tr>';
+  bindKeyActions(accounts);
 }
-function keyRow(k) {
-  const parked = k.parked;
-  const status = k.status === 'disabled' ? ['err', '停用'] : parked ? ['warn', '冷卻/耗盡'] : ['ok', '啟用'];
+function keyRow(a) {
+  const parked = a.parked;
+  const status = a.status === 'disabled' ? ['err', '停用'] : parked ? ['warn', '冷卻/耗盡'] : ['ok', '啟用'];
+  const label = a.name || a.email || a.cookiePreview || a.apiKeyPreview || '(未命名)';
+  const plan = a.userInfo ? (a.userInfo.plan || a.userInfo.username || '') : '';
   return `<tr>
-    <td>${esc(k.name || '(未命名)')}</td>
-    <td><code title="點擊複製" style="cursor:pointer" onclick="copyText('${esc(k.key)}')">${esc(k.masked)}</code></td>
+    <td>${esc(label)}</td>
+    <td>${pill('muted', TYPE_LABEL[a.type] || a.type)}</td>
     <td>${pill(status[0], status[1])}</td>
-    <td>${fmtNum(k.uses)}</td>
-    <td>${fmtNum(k.errors)}</td>
-    <td class="muted small">${fmtTime(k.lastUsedAt)}</td>
-    <td class="muted small" title="${esc(k.lastErrorMessage)}">${esc(k.lastErrorMessage ? k.lastErrorMessage.slice(0, 60) : '—')}</td>
+    <td class="small">${esc(plan)}</td>
+    <td>${fmtNum(a.uses)}</td>
+    <td>${fmtNum(a.errors)}</td>
+    <td class="muted small" title="${esc(a.lastErrorMessage)}">${esc(a.lastErrorMessage ? a.lastErrorMessage.slice(0, 50) : '—')}</td>
     <td style="white-space:nowrap">
-      <button class="btn small" data-act="toggle" data-id="${k.id}" data-status="${k.status === 'disabled' ? 'active' : 'disabled'}">${k.status === 'disabled' ? '啟用' : '停用'}</button>
-      <button class="btn small" data-act="reset" data-id="${k.id}">重置</button>
-      <button class="btn small" data-act="test" data-id="${k.id}">測試</button>
-      <button class="btn small danger" data-act="delete" data-id="${k.id}">刪除</button>
+      <button class="btn small" data-act="toggle" data-id="${a.id}" data-status="${a.status === 'disabled' ? 'active' : 'disabled'}">${a.status === 'disabled' ? '啟用' : '停用'}</button>
+      <button class="btn small" data-act="reset" data-id="${a.id}">重置</button>
+      ${a.type === 'login' ? `<button class="btn small" data-act="refresh" data-id="${a.id}">重登</button>` : ''}
+      <button class="btn small" data-act="test" data-id="${a.id}">測試</button>
+      <button class="btn small danger" data-act="delete" data-id="${a.id}">刪除</button>
     </td>
   </tr>`;
 }
-function bindKeyActions(keys) {
+function bindKeyActions(accounts) {
   document.querySelectorAll('#keys-body button').forEach((b) => {
     b.onclick = async () => {
       const id = b.dataset.id;
       const act = b.dataset.act;
       try {
-        if (act === 'toggle') await api('/api/admin/keys/status', { method: 'POST', body: JSON.stringify({ id, status: b.dataset.status }) });
-        if (act === 'reset') await api('/api/admin/keys/reset', { method: 'POST', body: JSON.stringify({ id }) });
+        if (act === 'toggle') await api('/api/admin/accounts/status', { method: 'POST', body: JSON.stringify({ id, status: b.dataset.status }) });
+        if (act === 'reset') await api('/api/admin/accounts/reset', { method: 'POST', body: JSON.stringify({ id }) });
         if (act === 'delete') {
-          if (!confirm('確定刪除這把 Key?')) return;
-          await api(`/api/admin/keys/${id}`, { method: 'DELETE' });
+          if (!confirm('確定刪除這個帳號?')) return;
+          await api(`/api/admin/accounts/${id}`, { method: 'DELETE' });
+        }
+        if (act === 'refresh') {
+          b.disabled = true; b.textContent = '重登中…';
+          const r = await api('/api/admin/accounts/refresh', { method: 'POST', body: JSON.stringify({ id }) });
+          toast(r.ok ? `已重新登入${r.user ? ':' + (r.user.username || r.user.email || '') : ''}` : `重登失敗:${r.message || ''}`, !r.ok);
         }
         if (act === 'test') {
           b.disabled = true; b.textContent = '測試中…';
-          const r = await api('/api/admin/keys/test', { method: 'POST', body: JSON.stringify({ id }) });
-          toast(r.ok ? `測試成功:${r.text.slice(0, 40)}` : `測試失敗:[${r.code}] ${r.message}`, !r.ok);
+          const r = await api('/api/admin/accounts/test', { method: 'POST', body: JSON.stringify({ id }) });
+          const who = r.user ? (r.user.username || r.user.email || JSON.stringify(r.user).slice(0, 60)) : (r.text || '');
+          toast(r.ok ? `帳號有效 ✓ ${r.relogged ? '(自動重登)' : ''} ${who}`.slice(0, 90) : `帳號無效:${r.message || r.code}`, !r.ok);
         }
         await loadKeys();
         await refreshOverview();
@@ -181,18 +203,33 @@ function bindKeyActions(keys) {
     };
   });
 }
-window.copyText = async (t) => { try { await navigator.clipboard.writeText(t); toast('已複製'); } catch { /* ignore */ } };
 
-$('#add-key-btn').addEventListener('click', async () => {
-  const key = $('#new-key').value.trim();
-  if (!key) return toast('請填入 Key', true);
+$('#add-cookie-btn').addEventListener('click', async () => {
+  const cookie = $('#new-cookie').value.trim();
+  if (!cookie) return toast('請貼上 Cookie', true);
   try {
-    const r = await api('/api/admin/keys', { method: 'POST', body: JSON.stringify({ key, name: $('#new-key-name').value }) });
-    toast(`已加入 ${r.added} 把${r.failed.length ? `,${r.failed.length} 把失敗` : ''}`, r.failed.length > 0);
-    $('#new-key').value = ''; $('#new-key-name').value = '';
+    const r = await api('/api/admin/accounts', { method: 'POST', body: JSON.stringify({ type: 'cookie', cookie, name: $('#new-cookie-name').value.trim() }) });
+    toast(`已加入 ${r.added} 個帳號${r.failed && r.failed.length ? `,${r.failed.length} 個失敗` : ''}`, r.failed && r.failed.length > 0);
+    $('#new-cookie').value = ''; $('#new-cookie-name').value = '';
     await loadKeys();
     await refreshOverview();
   } catch (err) { toast(err.message, true); }
+});
+
+$('#add-login-btn').addEventListener('click', async () => {
+  const email = $('#new-login-email').value.trim();
+  const password = $('#new-login-password').value;
+  if (!email || !password) return toast('請填 Email 與密碼', true);
+  try {
+    const btn = $('#add-login-btn');
+    btn.disabled = true; btn.textContent = '登入中…';
+    await api('/api/admin/accounts', { method: 'POST', body: JSON.stringify({ type: 'login', email, password }) });
+    toast(`帳號 ${email} 已登入並加入池`);
+    $('#new-login-email').value = ''; $('#new-login-password').value = '';
+    await loadKeys();
+    await refreshOverview();
+  } catch (err) { toast(err.message, true); }
+  finally { const b = $('#add-login-btn'); b.disabled = false; b.textContent = '登入並加入'; }
 });
 
 /* ---------------- gateway keys ---------------- */
