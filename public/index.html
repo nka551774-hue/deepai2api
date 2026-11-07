@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deepai2api — 管理面板</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230f1420'/><text x='16' y='22' font-size='16' text-anchor='middle' fill='%234f8cff' font-family='monospace'>2api</text></svg>">
+</head>
+<body>
+<div id="login" class="login-wrap hidden">
+  <form id="login-form" class="login-card">
+    <h1>deepai2api</h1>
+    <p class="muted">DeepAI.org 反代閘道 · 管理面板</p>
+    <input type="password" id="login-password" placeholder="管理密碼(環境變數 ADMIN_PASSWORD)" autocomplete="current-password">
+    <button type="submit" class="btn primary">登入</button>
+    <p id="login-error" class="error"></p>
+  </form>
+</div>
+
+<div id="app" class="hidden">
+  <header class="topbar">
+    <div class="brand">deepai<span class="accent">2api</span> <span class="muted small">v1.0.0</span></div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="dashboard" class="tab active">總覽</button>
+      <button data-tab="keys" class="tab">上游帳號池</button>
+      <button data-tab="gateway" class="tab">API 金鑰</button>
+      <button data-tab="logs" class="tab">請求日誌</button>
+      <button data-tab="settings" class="tab">設定</button>
+    </nav>
+    <div class="top-right">
+      <span class="muted small" id="uptime"></span>
+      <button class="btn ghost" id="logout-btn">登出</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============ dashboard ============ -->
+    <section id="tab-dashboard" class="tab-panel active">
+      <div class="cards" id="stat-cards"></div>
+      <div class="panel">
+        <h3>模型統計</h3>
+        <table class="table" id="model-stats">
+          <thead><tr><th>模型</th><th>請求</th><th>錯誤</th><th>字元數</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h3>上游狀態</h3>
+        <div id="upstream-status" class="pill-list"></div>
+      </div>
+    </section>
+
+    <!-- ============ upstream keys ============ -->
+    <section id="tab-keys" class="tab-panel">
+      <div class="panel">
+        <h3>新增上游帳號 Key</h3>
+        <p class="muted">填入 deepai.org 重建的 API Key(瀏覽器對 api.deepai.org 請求的 <code>api-key</code> header)。可一次貼多把,以空白或逗號分隔。留空池時,閘道會使用匿名的單次 tryit key(若已啟用 fallback)。</p>
+        <div class="row">
+          <input type="text" id="new-key" placeholder="例如 quick_login-…(或貼上整把 key)" style="flex:1">
+          <input type="text" id="new-key-name" placeholder="備註名稱(選填)">
+          <button class="btn primary" id="add-key-btn">加入</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>帳號池</h3>
+        <table class="table">
+          <thead><tr><th>名稱</th><th>Key</th><th>狀態</th><th>使用</th><th>錯誤</th><th>最近使用</th><th>最近錯誤</th><th>操作</th></tr></thead>
+          <tbody id="keys-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ gateway keys ============ -->
+    <section id="tab-gateway" class="tab-panel">
+      <div class="panel">
+        <h3>簽發 API 金鑰(給下游客戶端用)</h3>
+        <p class="muted">下游以 <code>Authorization: Bearer sk-deepai-…</code> 呼叫 /v1/chat/completions。可限制允許的模型與請求上限。</p>
+        <div class="row">
+          <input type="text" id="gw-name" placeholder="名稱(例如 my-nextchat)">
+          <input type="text" id="gw-models" placeholder="允許模型,逗號分隔(留空=全部)">
+          <input type="number" id="gw-limit" placeholder="請求上限(0=無限)" min="0" style="width:180px">
+          <button class="btn primary" id="gw-create-btn">簽發</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>已簽發金鑰</h3>
+        <table class="table">
+          <thead><tr><th>名稱</th><th>Key</th><th>狀態</th><th>已用/上限</th><th>允許模型</th><th>建立時間</th><th>操作</th></tr></thead>
+          <tbody id="gw-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ logs ============ -->
+    <section id="tab-logs" class="tab-panel">
+      <div class="panel">
+        <h3>請求日誌 <button class="btn ghost small" id="refresh-logs">重新整理</button></h3>
+        <table class="table">
+          <thead><tr><th>時間</th><th>端點</th><th>模型</th><th>金鑰</th><th>狀態</th><th>耗時</th><th>預覽 / 錯誤</th></tr></thead>
+          <tbody id="logs-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ settings ============ -->
+    <section id="tab-settings" class="tab-panel">
+      <div class="panel">
+        <h3>閘道設定</h3>
+        <div class="form-grid">
+          <label>預設模型</label>
+          <input type="text" id="set-default-model">
+          <label>允許未知模型直通</label>
+          <input type="checkbox" id="set-passthrough">
+          <label>上游超時(ms,至少 5000)</label>
+          <input type="number" id="set-timeout" min="5000" step="1000">
+        </div>
+        <label class="block-label">模型映射(JSON:對外模型 → 上游 model 欄位)</label>
+        <textarea id="set-model-map" rows="8" spellcheck="false"></textarea>
+        <button class="btn primary" id="save-settings">儲存設定</button>
+        <p id="settings-msg" class="small"></p>
+      </div>
+      <div class="panel">
+        <h3>使用方式</h3>
+        <pre id="usage-snippet" class="snippet"></pre>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/app.js"></script>
+</body>
+</html>

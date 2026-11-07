@@ -1,0 +1,20 @@
+services:
+  deepai2api:
+    build: .
+    container_name: deepai2api
+    restart: unless-stopped
+    ports:
+      - "3737:3737"
+    environment:
+      # 管理面板密碼(請務必改成自己的)
+      ADMIN_PASSWORD: "deepai2api"
+      # 池內 key 全數耗盡時,是否自動改用匿名單次 tryit key
+      ALLOW_ANONYMOUS_FALLBACK: "true"
+      # 未簽發任何 API 金鑰前,API 是否開放(免鑰匙);簽發第一把後即強制驗鑰
+      ALLOW_OPEN_WHEN_NO_KEYS: "true"
+      # 上游單次請求超時(毫秒)
+      UPSTREAM_TIMEOUT_MS: "180000"
+      # 也可以直接帶入上游 key(多把用逗號分隔),面板同樣可管理
+      # UPSTREAM_KEYS: "key1,key2"
+    volumes:
+      - ./data:/app/data
